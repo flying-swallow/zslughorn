@@ -1,0 +1,18 @@
+.{
+    .name = .slughorn,
+    .version = "0.0.0",
+    .fingerprint = 0x710c5c7e361c1524,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        .zml = .{
+            .url = "git+https://github.com/flying-swallow/zml.git#9acb814b87c37b97928c6d7a268a9b2ab7e568ca",
+            .hash = "zml-0.1.0-9dDMRIuwAgB7QoyWoxQG8lVM53-SVRBTerNvJ_3nPu2S",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "LICENSE",
+    },
+}

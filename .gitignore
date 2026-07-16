@@ -1,0 +1,6 @@
+# Zig build artifacts
+.zig-cache/
+zig-out/
+
+# Local package cache (--global-cache-dir), holds fetched deps
+zig-pkg/
