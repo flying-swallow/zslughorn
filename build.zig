@@ -163,6 +163,15 @@ pub fn build(b: *std.Build) void {
         renderer_mod.addImport("slughorn", mod);
         renderer_mod.addImport("rhi", rhi_mod);
 
+        // Compile the Slug shaders (GLSL, mirroring the reference GLSL) to SPIR-V with the system
+        // glslangValidator and embed them into the module. `-DSLUG_INDIRECTION_SIZE` is sourced
+        // from the same `indirection_size` build constant the packer and render.zig use, so the
+        // shader's band indexing can never silently drift from the CPU's.
+        const vert_spv = compileGlslSpv(b, "shaders/slug.vert", "slug.vert.spv", indirection_size);
+        const frag_spv = compileGlslSpv(b, "shaders/slug.frag", "slug.frag.spv", indirection_size);
+        renderer_mod.addAnonymousImport("slug_vert_spv", .{ .root_source_file = vert_spv });
+        renderer_mod.addAnonymousImport("slug_frag_spv", .{ .root_source_file = frag_spv });
+
         const renderer_test_mod = b.createModule(.{
             .root_source_file = b.path("test/renderer.zig"),
             .target = target,
@@ -235,6 +244,20 @@ pub fn build(b: *std.Build) void {
         "Check the checked-in fixtures still match the upstream C++ (needs g++)",
     );
     verify_step.dependOn(&diff.step);
+}
+
+/// Compiles a GLSL shader to SPIR-V with the system `glslangValidator`, returning a LazyPath to the
+/// emitted module for embedding via `addAnonymousImport` + `@embedFile`. The stage is inferred from
+/// the source extension (`.vert`/`.frag`). `TEX_WIDTH` is baked for the default 512-wide atlas
+/// (log2(512) = 9); a general renderer would pass it as a spec constant.
+fn compileGlslSpv(b: *std.Build, src: []const u8, out_name: []const u8, indir: u32) std.Build.LazyPath {
+    const run = b.addSystemCommand(&.{ "glslangValidator", "-V", "--target-env", "vulkan1.3" });
+    run.addArg(b.fmt("-DSLUG_INDIRECTION_SIZE={d}", .{indir}));
+    run.addArg("-DTEX_WIDTH=9");
+    run.addArg("-o");
+    const out = run.addOutputFileArg(out_name);
+    run.addFileArg(b.path(src));
+    return out;
 }
 
 /// Compiles the golden-fixture dumper against the upstream C++ with the given float flags.
