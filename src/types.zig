@@ -130,6 +130,55 @@ pub const Matrix = extern struct {
     }
 };
 
+/// A shape's placement in a scene, in em units. Ported from `Transform`, slughorn.hpp:165.
+///
+/// Deliberately *not* an affine: upstream replaced the old per-`Layer` `Matrix` (whose linear part
+/// `computeQuad` ignored) with this position-only form. `x`/`y` place a shape via
+/// `Shape.computeQuad`; `z` is an optional depth offset for 3D scenes. Gradient geometry still uses
+/// `Matrix` (see `GradientInfo`), which genuinely needs the 2x2 linear part. Lives in core because
+/// `Layer` (M3/compositing) carries one; the NanoSVG backend already produces it.
+pub const Transform = struct {
+    x: Slug = 0,
+    y: Slug = 0,
+    z: Slug = 0,
+};
+
+/// The kinds of color ramp a gradient can be. Ported from `GradientInfo::Type`, slughorn.hpp:198.
+/// The `transform` `Matrix` on a `GradientInfo` is interpreted per variant.
+pub const GradientType = enum {
+    /// Along a line: `t = m.xx*emX + m.xy*emY + m.dx`.
+    linear,
+    /// From a center: `m.dx/dy` = center, `m.xx` = outer radius, `inner_radius` = inner radius.
+    radial,
+    /// Around a center by angle, over `start_angle`..`end_angle` (turns).
+    sweep,
+    /// Radial in an affine-warped space: `m` is the 2x2 inverse-affine, `inner_radius` in that space.
+    affine_radial,
+};
+
+/// One stop in a gradient's color ramp. Ported from `GradientStop`, slughorn.hpp:191.
+pub const GradientStop = struct {
+    /// Position along the gradient axis, in [0, 1].
+    t: Slug = 0,
+    color: Color,
+};
+
+/// A gradient paint: a color ramp plus the geometry that maps em-space to a ramp position. Ported
+/// from `GradientInfo`, slughorn.hpp:196. Registered with `Atlas.addGradient` before `build()`
+/// (the atlas-side storage is M5 work); a `Layer` then references the returned id. `stops` is
+/// borrowed, mirroring how `ShapeInfo` borrows its curves.
+pub const GradientInfo = struct {
+    type: GradientType = .linear,
+    stops: []const GradientStop = &.{},
+    /// Gradient geometry in local em-space; interpreted per `type` (see `GradientType`).
+    transform: Matrix = .identity,
+    /// Radial/AffineRadial: inner radius in em-space (0 = point center).
+    inner_radius: Slug = 0,
+    /// Sweep only: arc range in turns, [0, 1].
+    start_angle: Slug = 0,
+    end_angle: Slug = 1,
+};
+
 /// Pixel data ready to hand to a graphics API, exactly as `Atlas::TextureData`
 /// (slughorn.hpp:818).
 ///
@@ -236,8 +285,10 @@ pub const ShapeInfo = struct {
 
 /// Everything the renderer needs to draw one shape. Populated by `build()`.
 ///
-/// Ported from `Atlas::Shape`, slughorn.hpp:727. The MSDF and scanline fields upstream carries are
-/// omitted until those features are ported.
+/// Ported from `Atlas::Shape`, slughorn.hpp:727. Carries the MSDF result fields (`msdf_layer`,
+/// `msdf_range`) so the core `Shape` can hold an MSDF tile reference; the atlas-level machinery that
+/// populates them is still unported. The scanline-sweeper fields upstream also has are omitted --
+/// that feature is not on the roadmap.
 pub const Shape = struct {
     /// Where this shape's band header block starts in the band texture (texel coords).
     band_tex_x: u32 = 0,
@@ -267,6 +318,15 @@ pub const Shape = struct {
 
     /// The origin spec as supplied, retained for diagnostics and for `computeQuad` branching.
     origin: Origin = .default,
+
+    /// Layer index in the MSDF texture array; -1 = no MSDF tile generated yet. Ported from
+    /// `msdfLayer` (slughorn.hpp:762). The field lives here so the core `Shape` can *carry* an MSDF
+    /// result; the atlas-level machinery that populates it (`rasterizeSDFAtlas`/`requestMSDF`) is
+    /// still unported -- see `src/backends/sdf.zig`.
+    msdf_layer: i32 = -1,
+    /// Em-space SDF range used when this shape's MSDF tile was generated. Ported from `msdfRange`
+    /// (slughorn.hpp:766). Zero until a tile is generated.
+    msdf_range: Slug = 0,
 
     /// The original em-space curves, retained post-build so callers can re-read outlines without
     /// re-running a font backend. Owned by the `Atlas`.
@@ -391,4 +451,32 @@ test "TextureData texel sizes" {
     try std.testing.expectEqual(@as(u32, 12), TextureData.Format.rgb32f.texelSize());
     const empty: TextureData = .{};
     try std.testing.expect(empty.isEmpty());
+}
+
+test "Transform is position-only, zero by default" {
+    const t: Transform = .{ .x = 1, .y = 2 };
+    try std.testing.expectEqual(@as(Slug, 1), t.x);
+    try std.testing.expectEqual(@as(Slug, 2), t.y);
+    try std.testing.expectEqual(@as(Slug, 0), t.z);
+}
+
+test "GradientInfo carries the upstream defaults" {
+    const g: GradientInfo = .{ .stops = &.{
+        .{ .t = 0, .color = rgb(1, 0, 0) },
+        .{ .t = 1, .color = rgb(0, 0, 1) },
+    } };
+    try std.testing.expectEqual(GradientType.linear, g.type);
+    try std.testing.expect(std.meta.eql(g.transform, Matrix.identity));
+    try std.testing.expectEqual(@as(Slug, 0), g.inner_radius);
+    try std.testing.expectEqual(@as(Slug, 0), g.start_angle);
+    try std.testing.expectEqual(@as(Slug, 1), g.end_angle);
+    try std.testing.expectEqual(@as(usize, 2), g.stops.len);
+    // Color is a Vec4f32; rgb() sets a = 1, so a stop can be lerped directly.
+    try std.testing.expectEqual(@as(Slug, 1), g.stops[0].color[3]);
+}
+
+test "Shape carries MSDF result fields defaulted to 'none'" {
+    const s: Shape = .{};
+    try std.testing.expectEqual(@as(i32, -1), s.msdf_layer); // -1 sentinel = no tile generated
+    try std.testing.expectEqual(@as(Slug, 0), s.msdf_range);
 }

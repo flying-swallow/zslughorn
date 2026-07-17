@@ -14,7 +14,8 @@
 //!
 //! Scope: filled shapes' path geometry, including the evenodd -> nonzero winding conversion.
 //! Gradients, strokes, and the `CompositeShape`/`Layer` compositing API (`loadImage` upstream) are
-//! not ported -- they depend on core types that do not exist here yet.
+//! not ported yet. The shared core types they build on -- `Transform`, `GradientInfo` -- now live in
+//! `types.zig`; `CompositeShape`/`Layer` themselves arrive with the compositing frontend.
 
 const std = @import("std");
 const slughorn = @import("slughorn");
@@ -37,14 +38,10 @@ const units = "px";
 
 /// Where a decomposed shape sits in the source SVG's space, in em units.
 ///
-/// Ported from `Transform`, slughorn.hpp:165. Upstream keeps this in the core because `Layer`
-/// carries one; here it is backend-local until `CompositeShape`/`Layer` are ported, at which point
-/// it belongs in `types.zig`.
-pub const Transform = struct {
-    x: Slug = 0,
-    y: Slug = 0,
-    z: Slug = 0,
-};
+/// Re-exported from the core (`slughorn.Transform`, `types.zig`): upstream keeps this in the core
+/// because `Layer` carries one, so it now lives there rather than in this backend. Kept as a
+/// backend alias so existing call sites (`decomposePath`/`loadShape`) stay unchanged.
+pub const Transform = slughorn.Transform;
 
 /// A parsed SVG document. Owns the underlying nanosvg allocation.
 pub const Image = struct {

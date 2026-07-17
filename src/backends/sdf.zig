@@ -11,8 +11,9 @@
 //! Like the nanosvg backend, this is a separate module that imports `slughorn`, never the reverse.
 //! MSDF is upstream's default-off `SLUGHORN_MSDF` side-channel; it stays out of the MIT core.
 //!
-//! Scope: the generation primitives only. Upstream's atlas-level machinery (`rasterizeSDFAtlas`,
-//! `requestMSDF`, the `Shape.msdfLayer` field, serialization) is not ported.
+//! Scope: the generation primitives only. The core `Shape` now carries the MSDF result fields
+//! (`msdf_layer`/`msdf_range`), but the atlas-level machinery that would populate them
+//! (`rasterizeSDFAtlas`, `requestMSDF`, the MSDF texture array, serialization) is not ported.
 
 const std = @import("std");
 const slughorn = @import("slughorn");
