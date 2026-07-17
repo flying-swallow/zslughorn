@@ -20,7 +20,7 @@ theoretical.
 **Here:** `bands.buildShapeBands` returns `error.TooManyBands` when either axis exceeds
 `max_bands` (256 -- the most a `u8` index can address). Covered by a unit test in `src/bands.zig`.
 
-**Worth reporting upstream.**
+**Reported upstream:** [AlphaPixel/slughorn#2](https://github.com/AlphaPixel/slughorn/issues/2).
 
 ### 2. The power-of-two texture width check vanishes in release builds
 
@@ -50,6 +50,8 @@ scanning a band early, so any order among equal-extent curves is equally valid. 
 pushes indices ascending (`slughorn.cpp:1053`/`:1116`), a total order is exactly what
 `std::stable_sort` would produce there.
 
+**Reported upstream:** [AlphaPixel/slughorn#3](https://github.com/AlphaPixel/slughorn/issues/3).
+
 Consequence for testing: fixtures deliberately avoid ties above n=16, because at those sizes the
 C++ output is an artifact of one standard library rather than a specification. `ties_in_sort`
 covers ties at n=8, inside the range where libstdc++ is stable and the two agree exactly.
@@ -60,6 +62,8 @@ The bare `>` comparator is not a strict weak ordering when a coordinate is NaN, 
 `std::sort` has UB (it can read out of bounds).
 
 **Here:** rejected at ingest with `error.NonFiniteCoordinate`.
+
+**Reported upstream:** [AlphaPixel/slughorn#4](https://github.com/AlphaPixel/slughorn/issues/4).
 
 ### 5. The NanoSVG backend's cubic walk can read past the end of a path
 
