@@ -142,6 +142,39 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&b.addRunArtifact(sdf_tests).step);
     }
 
+    // -- GPU renderer backend (M3) ---------------------------------------------------------------
+    //
+    // Off by default. The Vulkan renderer + Slug shader that draws the compiled atlas. It links
+    // rhi-zig (GPL-2.0), so it is a *separate module* that imports `slughorn`, never the reverse --
+    // the same seam nanosvg/msdf use, here keeping GPL out of the MIT core. The dependency is lazy,
+    // so a default `zig build` never fetches rhi and stays MIT/pure-Zig. Needs Vulkan at test time.
+
+    const enable_renderer = b.option(bool, "renderer", "Build the GPU renderer backend module (needs ../rhi-zig, Vulkan)") orelse false;
+
+    if (enable_renderer) {
+        const rhi_dep = b.lazyDependency("rhi", .{ .target = target, .optimize = optimize }) orelse return;
+        const rhi_mod = rhi_dep.module("rhi");
+
+        const renderer_mod = b.addModule("slughorn_renderer", .{
+            .root_source_file = b.path("src/gpu/renderer.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        renderer_mod.addImport("slughorn", mod);
+        renderer_mod.addImport("rhi", rhi_mod);
+
+        const renderer_test_mod = b.createModule(.{
+            .root_source_file = b.path("test/renderer.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        renderer_test_mod.addImport("slughorn", mod);
+        renderer_test_mod.addImport("slughorn_renderer", renderer_mod);
+
+        const renderer_tests = b.addTest(.{ .root_module = renderer_test_mod });
+        test_step.dependOn(&b.addRunArtifact(renderer_tests).step);
+    }
+
     // -- fixtures --------------------------------------------------------------------------------
     //
     // Deliberately NOT wired into the default or `test` step: fixtures are checked in, so neither

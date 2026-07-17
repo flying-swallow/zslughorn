@@ -18,6 +18,10 @@
             .hash = "msdf_zig-1.0.0-5-oN40lgFgDmHjBF-LmdrfyxGw__AzzE6DNY_4XTFX78",
             .lazy = true,
         },
+        // The GPU renderer backend (M3): a separate GPL-2.0 module linking rhi-zig. Sibling path
+        // dep during bring-up; pin by URL+hash once its API settles. Lazy: only fetched under
+        // `-Drenderer=true`, so the default build never pulls in rhi/Vulkan and stays MIT/pure-Zig.
+        .rhi = .{ .path = "../rhi-zig", .lazy = true },
     },
     .paths = .{
         "build.zig",
