@@ -8,6 +8,16 @@
             .url = "git+https://github.com/flying-swallow/zml.git#9acb814b87c37b97928c6d7a268a9b2ab7e568ca",
             .hash = "zml-0.1.0-9dDMRIuwAgB7QoyWoxQG8lVM53-SVRBTerNvJ_3nPu2S",
         },
+        // Lazy: only fetched under `-Dnanosvg=true`, so a default build stays free of C and libc.
+        .nanosvg = .{ .path = "deps/nanosvg", .lazy = true },
+        // The user's msdf-zig (pure-Zig msdfgen port), used only under `-Dmsdf=true`. Pinned by
+        // URL+hash to the pushed `msdf-core` commit. Its own mach-freetype/turbopack deps are lazy
+        // (and `-Dmsdf` passes `.font = false`), so this stays unfetched in a default build.
+        .msdf_zig = .{
+            .url = "git+https://github.com/flying-swallow/msdf-zig.git#d3f7e538bfbfb7fdd40db7e023e44763a2b92382",
+            .hash = "msdf_zig-1.0.0-5-oN40lgFgDmHjBF-LmdrfyxGw__AzzE6DNY_4XTFX78",
+            .lazy = true,
+        },
     },
     .paths = .{
         "build.zig",

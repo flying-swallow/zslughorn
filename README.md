@@ -96,14 +96,84 @@ in **[DIVERGENCE.md](DIVERGENCE.md)**.
 | Milestone | Scope | Status |
 |---|---|---|
 | **M1** | Atlas compiler + golden tests | **done** |
-| M2 | Backends: Canvas → FreeType → NanoSVG | planned |
+| M2 | Backends: Canvas → FreeType → NanoSVG | NanoSVG paths done; Canvas/FreeType planned |
 | M3 | rhi-zig renderer + Slang shader (Vulkan-only) | planned |
-| M4 | Gradients, MSDF, compositing | planned |
+| M4 | Gradients, MSDF, compositing | MSDF generation done (msdf-zig); gradients/compositing planned |
 
 M3 will live in a separate module: the core has no graphics dependencies and stays MIT, while the
 renderer links rhi-zig (GPL-2.0). See [LICENSE](LICENSE).
+
+## NanoSVG backend
+
+Off by default, mirroring upstream's `SLUGHORN_NANOSVG=OFF`:
+
+```sh
+zig build -Dnanosvg=true          # build the backend module
+zig build test -Dnanosvg=true     # and run its tests
+```
+
+With the option unset, [nanosvg](https://github.com/memononen/nanosvg) is never even downloaded, so
+the default build stays pure Zig and needs no network beyond `zml`. The dependency lives in
+`deps/nanosvg/` as a wrapper package — build glue and a four-line implementation shim, with the
+upstream source fetched by URL+hash rather than vendored. It is pinned to the same commit
+`slughorn/ext/nanosvg` tracks, so the C++ and this port parse identically.
+
+`slughorn_nanosvg` is a **separate module** that imports `slughorn`, never the reverse: nanosvg is C
+and pulls in libc, and that must not reach the core. Same seam M3 uses for licensing.
+
+```zig
+const svg = @import("slughorn_nanosvg");
+
+const image = svg.parseFromMemory(gpa, source, 96);
+defer image.deinit();
+
+// NanoSVG never reports bad input -- garbage yields a zero-width image, so this is the check.
+const scale = image.scale() orelse return error.NotAnSvg;
+
+var it = image.shapes();
+while (it.next()) |shape| {
+    if (!svg.isVisible(shape) or !svg.isFilled(shape)) continue;
+    _ = try svg.loadShape(gpa, &atlas, shape, .{ .name = "…" }, scale, .default, true, 1);
+}
+```
+
+Scope: path geometry, including the `fill-rule="evenodd"` → nonzero winding conversion. Gradients,
+strokes, and the `CompositeShape`/`Layer` compositing API are not ported — they need core types that
+do not exist yet (M4).
+
+## SDF / MSDF backend
+
+Off by default, mirroring upstream's `SLUGHORN_MSDF=OFF`:
+
+```sh
+zig build -Dmsdf=true             # build the backend module
+zig build test -Dmsdf=true        # and run its tests
+```
+
+Turns a built shape's retained curves into single-channel SDF or three-channel MSDF tiles — the
+`renderSDF`/`renderMSDF`/`renderMSDFTile` family from upstream's `render.hpp`, which upstream backs
+with Chlumsky's C++ [msdfgen](https://github.com/Chlumsky/msdfgen). Here the generator is the user's
+[msdf-zig](https://github.com/flying-swallow/msdf-zig) (a pure-Zig msdfgen port), consumed through
+its **FreeType-free `msdf-core`** module (`.font = false`). So the curves → distance-field path
+pulls in no FreeType: `-Dmsdf=true` fetches no C at all.
+
+```zig
+const sdf = @import("slughorn_sdf");
+
+// tile_size = longest axis in texels; range = em-space spread mapped to the full [0,1] output.
+var grid = (try sdf.renderSDF(gpa, &atlas, .{ .name = "A" }, 128, 0.1)) orelse return;
+defer grid.deinit(gpa);
+// grid.at(x, y, 0): edge ~= 0.5, interior > 0.5, exterior < 0.5. Row 0 = top.
+```
+
+`slughorn_sdf` is a **separate module** that imports `slughorn`, never the reverse — MSDF stays out
+of the MIT core, upstream's default-off side channel. Scope: the generation primitives only.
+Upstream's atlas-level machinery (`rasterizeSDFAtlas`, `requestMSDF`, the `Shape.msdfLayer` field,
+serialization) is not ported.
 
 ## Requirements
 
 - Zig 0.17.0-dev (tracks nightly)
 - `g++` with C++20 — **only** to regenerate fixtures, never to build or test
+- Nothing extra for `-Dnanosvg=true`: the C is compiled by Zig itself
+- `-Dmsdf=true` needs a `../msdf-zig` checkout (sibling path dependency); it compiles no C either

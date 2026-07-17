@@ -61,6 +61,19 @@ The bare `>` comparator is not a strict weak ordering when a coordinate is NaN, 
 
 **Here:** rejected at ingest with `error.NonFiniteCoordinate`.
 
+### 5. The NanoSVG backend's cubic walk can read past the end of a path
+
+`decomposePath` strides the flat cubic array with `for(int i = 0; i < path->npts - 1; i += 3)`
+(`nanosvg.hpp:363`), then reads six floats at `pts + i*2 + 2`. That bound admits a final iteration
+whenever `npts % 3 != 1`, and the read then runs up to four floats past the end of `pts`.
+
+It is latent rather than live: NanoSVG only ever emits `npts = 1 + 3k` ("Expect 1 + N*3 points",
+`nanosvg.h:1057`), so no real input reaches it.
+
+**Here:** the bound is `i + 3 < npts`. Identical iteration for every path NanoSVG can produce, and no
+out-of-bounds read on a malformed one. Unreported upstream — unreachable through the public API, so
+a robustness nit rather than a live bug.
+
 ## API changes
 
 ### Allocation failure panics
@@ -132,6 +145,64 @@ This is why golden testing is tiered:
   compared byte-for-byte. Carries essentially all the invariant coverage.
 * **Tier B -- multiple shapes.** Compared semantically (via `decode`), because byte equality with
   the C++ would be asserting a property of libstdc++'s hash table, not of slughorn.
+
+### The NanoSVG backend covers paths only
+
+Upstream's `nanosvg.hpp` builds a `CompositeShape` of `Layer`s (`loadImage`, `nanosvg.hpp:435`).
+Neither type is ported yet, so `slughorn_nanosvg` stops at the level below: `decomposePath` and
+`loadShape`, which need only `ShapeInfo` and `CurveDecomposer`. Gradients and strokes are out for
+the same reason. `Transform` (`slughorn.hpp:165`) lives in the backend rather than `types.zig`
+until `CompositeShape`/`Layer` arrive and give it a reason to be core.
+
+### parseFromMemory has no parse error
+
+NanoSVG has no notion of invalid input: unparseable text yields an *empty* image with zero width
+rather than a failure. `nsvgParse` returns null in exactly one case — its own parser allocation
+failing (`nanosvg.h:3033-3035`) — which is OOM, and this port panics on OOM rather than reporting it.
+So an `error.InvalidSvg` would be a lie about what happened, and the signature omits it. Callers ask
+`image.scale()` instead, which is null precisely when the image is unusable.
+
+Upstream instead warns through a `LogCallback` and returns an empty `CompositeShape`
+(`nanosvg.hpp:462-466`).
+
+### The SVG backend is tested against hand-written expectations
+
+The only suite here not anchored to the C++. Every other test derives its expectations by running
+upstream and dumping fixtures; `test/nanosvg.zig` computes them by hand.
+
+**Why:** there is no oracle to dump from. `-DSLUGHORN_NANOSVG=ON` does not compile against the
+NanoSVG commit `ext/nanosvg` pins — `nanosvg.hpp:594` reads `g->units` on `NSVGgradient`, a field
+that exists only on the internal `NSVGgradientData` upstream. The three `ext/nanosvg-0*.diff` patches
+that would add it are tracked but unapplied. Wiring an SVG case into the dumper therefore means first
+fixing the C++ build, which is work in a different repository.
+
+The assertions compensate by pinning behaviour rather than values — enclosed area for the winding
+conversion, sub-path start points for ordering — so they stay honest without a golden reference. The
+underlying curve math is already covered byte-exactly by `golden_decompose.zig`, since every backend
+funnels through the same `CurveDecomposer`.
+
+### The SDF/MSDF backend uses msdf-zig, not msdfgen
+
+Upstream's `renderSDF`/`renderMSDF`/`renderMSDFTile` (`render.hpp:621`+) convert the atlas's curves
+to an `msdfgen::Shape` and call Chlumsky's C++ **msdfgen** (vendored at `slughorn/ext/msdfgen`,
+gated behind `SLUGHORN_MSDF`). This port keeps the same seam — curves in, SDF/MSDF tile out — but
+the generator is the user's **msdf-zig**, a pure-Zig msdfgen port, reached through a FreeType-free
+`msdf-core` module it now exposes. No C, no FreeType.
+
+Consequences of the different generator:
+
+- **No byte oracle.** msdf-zig and msdfgen are distinct implementations that differ at the LSB, so
+  `test/sdf.zig` (like `test/nanosvg.zig`) asserts distance-field *properties* — edge ≈ 0.5,
+  interior > 0.5, exterior < 0.5, MSDF median reconstruction, letterbox margins — not exact texels.
+- **No Y-flip.** `render.hpp:renderSDF` flips msdfgen's Y-up output to make `Grid` row 0 = top.
+  msdf-zig already emits row 0 = top, so the flip is dropped.
+- **Winding.** Upstream reverses each contour and calls `orientContours()` to match msdfgen's
+  convention. Here the atlas curves already carry correct nonzero winding (holes reversed at
+  decompose time), so the shape is passed through as-is and msdf-zig's `orientation = .guess`
+  out-of-bounds probe fixes only the global sign.
+- **Scope.** Only the generation primitives are ported. Upstream's atlas-level MSDF machinery
+  (`rasterizeSDFAtlas`, `requestMSDF`, `Shape.msdfLayer`/`msdfRange`, the `RGB32F` texture format,
+  serialization) is not — it would touch the core `Shape` struct, which stays MSDF-free for now.
 
 ### render.zig mirrors render.hpp, not the GLSL
 

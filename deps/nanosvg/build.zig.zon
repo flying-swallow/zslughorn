@@ -1,0 +1,26 @@
+.{
+    .name = .nanosvg,
+    .version = "0.0.0",
+    .fingerprint = 0x3c0ee6c238f9550f,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        // Pinned to the same commit slughorn's ext/nanosvg submodule tracks, so the C++ and the Zig
+        // port parse identically. nanosvg is untagged upstream, so a commit is the only pin available.
+        //
+        // `.lazy` has to be declared *here*, on the URL entry. Marking the `.path` entry lazy in the
+        // root manifest does not stop Zig resolving this manifest and fetching what it lists:
+        // measured from a cold cache, a plain `zig build` downloads nanosvg without this line.
+        // (rhi-zig's deps/vma omits it, and so fetches VMA even on Apple targets that never use it.)
+        .nanosvg = .{
+            .url = "git+https://github.com/memononen/nanosvg.git#5cefd9847949af6df13f65027fd43af5a7513633",
+            .hash = "N-V-__8AAAhbBwAYSCf0FkIXXVhXJWA10oTVMNL8HdnxJpSm",
+            .lazy = true,
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "main.zig",
+        "nanosvg_impl.c",
+    },
+}

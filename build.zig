@@ -58,6 +58,90 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_tests.step);
 
+    // -- nanosvg backend -------------------------------------------------------------------------
+    //
+    // Off by default, mirroring upstream's `option(SLUGHORN_NANOSVG ... OFF)` (CMakeLists.txt:45).
+    // The dependency is `.lazy`, so with the option off nanosvg is never even fetched and a plain
+    // `zig build` stays pure Zig.
+    //
+    // This is a *separate module* that imports `slughorn`, never the reverse. nanosvg is C and
+    // needs libc; keeping it behind its own module boundary is what stops that reaching the core --
+    // the same seam the M3 renderer will use to keep GPL/rhi-zig out of the MIT core.
+
+    const enable_nanosvg = b.option(bool, "nanosvg", "Build the NanoSVG backend module") orelse false;
+
+    if (enable_nanosvg) {
+        // Each `orelse return` here is the lazy-fetch protocol, not an error path: it abandons this
+        // configure pass so the runner can fetch nanosvg and re-run, after which they all resolve.
+        // The binding comes from a function rather than deps/nanosvg's `build()` precisely so that
+        // last null can reach this scope -- see the comment on `binding` there.
+        const nanosvg_pkg = b.lazyImport(@This(), "nanosvg") orelse return;
+        const nanosvg_dep = b.lazyDependency("nanosvg", .{}) orelse return;
+        const nanosvg = nanosvg_pkg.binding(nanosvg_dep.builder, target, optimize) orelse return;
+
+        const svg_mod = b.addModule("slughorn_nanosvg", .{
+            .root_source_file = b.path("src/backends/nanosvg.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        svg_mod.addImport("slughorn", mod);
+        svg_mod.addImport("nanosvg", nanosvg.module);
+        svg_mod.linkLibrary(nanosvg.lib);
+
+        // A separate test binary rather than a fifth suite in test/root.zig: that file uses
+        // refAllDecls, which would force analysis of the backend import even in builds where the
+        // dependency was never fetched.
+        const svg_test_mod = b.createModule(.{
+            .root_source_file = b.path("test/nanosvg.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        svg_test_mod.addImport("slughorn", mod);
+        svg_test_mod.addImport("slughorn_nanosvg", svg_mod);
+
+        const svg_tests = b.addTest(.{ .root_module = svg_test_mod });
+        test_step.dependOn(&b.addRunArtifact(svg_tests).step);
+    }
+
+    // -- SDF/MSDF backend ------------------------------------------------------------------------
+    //
+    // Off by default. Turns a built shape's curves into SDF/MSDF tiles -- the `renderSDF` family
+    // from upstream's render.hpp, which upstream delegates to Chlumsky's C++ msdfgen. Here the
+    // generator is the user's msdf-zig (a pure-Zig msdfgen port). We take its FreeType-free
+    // `msdf-core` module by passing `.font = false`, so the curves -> distance-field path pulls in
+    // no FreeType (and dodges mach-freetype's `@cImport`, which the current Zig nightly rejects).
+    //
+    // A separate module importing `slughorn`, never the reverse -- MSDF stays out of the MIT core.
+
+    const enable_msdf = b.option(bool, "msdf", "Build the SDF/MSDF backend module (needs ../msdf-zig)") orelse false;
+
+    if (enable_msdf) {
+        const msdf_dep = b.lazyDependency("msdf_zig", .{
+            .target = target,
+            .optimize = optimize,
+            .font = false,
+        }) orelse return;
+
+        const sdf_mod = b.addModule("slughorn_sdf", .{
+            .root_source_file = b.path("src/backends/sdf.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        sdf_mod.addImport("slughorn", mod);
+        sdf_mod.addImport("msdf", msdf_dep.module("msdf-core"));
+
+        const sdf_test_mod = b.createModule(.{
+            .root_source_file = b.path("test/sdf.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        sdf_test_mod.addImport("slughorn", mod);
+        sdf_test_mod.addImport("slughorn_sdf", sdf_mod);
+
+        const sdf_tests = b.addTest(.{ .root_module = sdf_test_mod });
+        test_step.dependOn(&b.addRunArtifact(sdf_tests).step);
+    }
+
     // -- fixtures --------------------------------------------------------------------------------
     //
     // Deliberately NOT wired into the default or `test` step: fixtures are checked in, so neither
