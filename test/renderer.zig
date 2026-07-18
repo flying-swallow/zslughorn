@@ -112,3 +112,66 @@ test "GPU coverage of a triangle matches the render.zig oracle" {
     // than the threshold from GPU/CPU float ordering; the bulk must agree tightly).
     try std.testing.expect(agree * 100 >= total * 97);
 }
+
+test "GPU samples the gradient strip: a linear ramp runs red to blue" {
+    const gpa = std.testing.allocator;
+
+    var atlas = try slughorn.Atlas.init(gpa, slughorn.default_texture_width);
+    defer atlas.deinit();
+
+    // A linear gradient with t = emX (xx = 1): red at the left edge, blue at the right.
+    const stops = [_]slughorn.GradientStop{
+        .{ .t = 0, .color = slughorn.rgb(1, 0, 0) },
+        .{ .t = 1, .color = slughorn.rgb(0, 0, 1) },
+    };
+    const gid = try atlas.addGradient(.{ .type = .linear, .transform = .{ .xx = 1, .xy = 0, .dx = 0 }, .stops = &stops });
+    try atlas.build();
+
+    const n: u32 = 16;
+    const px = (try renderer.renderGradient(gpa, &atlas, gid, n, 0, 0, 1, 1)).?;
+    defer gpa.free(px);
+
+    // Middle row: the left texel (emX ~ 0) is red, the right texel (emX ~ 1) is blue.
+    const row = n / 2;
+    const left = (row * n + 0) * 4;
+    const right = (row * n + (n - 1)) * 4;
+    try std.testing.expect(px[left + 0] > 200 and px[left + 2] < 60); // red-dominant
+    try std.testing.expect(px[right + 2] > 200 and px[right + 0] < 60); // blue-dominant
+
+    // And the ramp is monotone: blue grows left-to-right across the row.
+    try std.testing.expect(px[right + 2] > px[left + 2]);
+}
+
+test "GPU samples an MSDF tile array and median-reconstructs it" {
+    const gpa = std.testing.allocator;
+
+    // Hand-build a 4x4 single-layer RGB32F tile: the left half is interior (all channels 0.7 ->
+    // median 0.7 > 0.5), the right half exterior (0.3 < 0.5). This exercises the GPU array fetch +
+    // median path against the Phase-4 texture format without coupling to the msdf-zig backend.
+    const ts: u32 = 4;
+    const bytes = try gpa.alloc(u8, ts * ts * 3 * 4);
+    defer gpa.free(bytes);
+    var y: u32 = 0;
+    while (y < ts) : (y += 1) {
+        var x: u32 = 0;
+        while (x < ts) : (x += 1) {
+            const v: f32 = if (x < ts / 2) 0.7 else 0.3;
+            const texel = (y * ts + x) * 3;
+            inline for (0..3) |ch| {
+                std.mem.writeInt(u32, bytes[(texel + ch) * 4 ..][0..4], @bitCast(v), .little);
+            }
+        }
+    }
+    const td = slughorn.TextureData{ .bytes = bytes, .width = ts, .height = ts, .depth = 1, .format = .rgb32f };
+
+    const n: u32 = 16;
+    const cov = (try renderer.renderMsdf(gpa, &td, 0, n)).?;
+    defer gpa.free(cov);
+
+    const row = n / 2;
+    try std.testing.expect(cov[row * n + 1] > 0.5); // left -> interior
+    try std.testing.expect(cov[row * n + (n - 2)] < 0.5); // right -> exterior
+
+    // Out-of-range layer -> null.
+    try std.testing.expect((try renderer.renderMsdf(gpa, &td, 5, n)) == null);
+}

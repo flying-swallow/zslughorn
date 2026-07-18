@@ -10,10 +10,12 @@ you feed it curves, it emits packed pixel buffers plus per-shape metadata. Uploa
 and running the Slug shader is the caller's job. (Upstream pairs with `osgSlug`; this one is built
 to pair with [rhi-zig](https://github.com/flying-swallow/rhi-zig).)
 
-> **Status:** The atlas compiler is complete and validated byte-for-byte against the upstream C++.
-> All four backends (NanoSVG, SDF/MSDF, FreeType, Canvas), gradients + compositing, atlas-level MSDF,
-> and a headless Vulkan renderer (behind `-Drenderer`, cross-checked bit-exactly against the CPU
-> oracle) are in. What remains is GPU rendering of gradients/MSDF — see [Roadmap](#roadmap).
+> **Status:** The full roadmap (M1–M4) is in. The atlas compiler is validated byte-for-byte against
+> the upstream C++; all four backends (NanoSVG, SDF/MSDF, FreeType, Canvas), gradients + compositing,
+> and atlas-level MSDF are done; and a headless Vulkan renderer (behind `-Drenderer`) draws glyph
+> coverage bit-exactly against the CPU oracle and samples the gradient strip and MSDF tile array on
+> the GPU. Remaining work is breadth — color/emoji glyphs, canvas stroking/text, and the full
+> multi-layer compositing/blend pipeline. See [Roadmap](#roadmap).
 
 ## Usage
 
@@ -99,8 +101,8 @@ in **[DIVERGENCE.md](DIVERGENCE.md)**.
 |---|---|---|
 | **M1** | Atlas compiler + golden tests | **done** |
 | M2 | Backends: Canvas → FreeType → NanoSVG | **done** — NanoSVG (geometry + `loadImage` compositing), FreeType (monochrome glyphs), Canvas (path + fill) |
-| M3 | rhi-zig renderer + shader (Vulkan-only) | **filled-glyph slice done** (headless, bit-exact vs the CPU oracle); gradient/MSDF rendering planned |
-| M4 | Gradients, MSDF, compositing | **data side done** — gradient strip, `loadImage` compositing, atlas-level MSDF (`Texture2DArray`); GPU rendering of them is M3 |
+| M3 | rhi-zig renderer + shader (Vulkan-only) | **done** — filled-glyph slice (headless, bit-exact vs the CPU oracle) + gradient-strip and MSDF-array GPU sampling |
+| M4 | Gradients, MSDF, compositing | **done** — gradient strip, `loadImage` compositing, atlas-level MSDF (`Texture2DArray`), and their GPU sampling |
 
 M3 will live in a separate module: the core has no graphics dependencies and stays MIT, while the
 renderer links rhi-zig (GPL-2.0). See [LICENSE](LICENSE).

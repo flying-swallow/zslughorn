@@ -229,8 +229,12 @@ pub fn build(b: *std.Build) void {
         // shader's band indexing can never silently drift from the CPU's.
         const vert_spv = compileGlslSpv(b, "shaders/slug.vert", "slug.vert.spv", indirection_size);
         const frag_spv = compileGlslSpv(b, "shaders/slug.frag", "slug.frag.spv", indirection_size);
+        const grad_frag_spv = compileGlslSpv(b, "shaders/slug_gradient.frag", "slug_gradient.frag.spv", indirection_size);
+        const msdf_frag_spv = compileGlslSpv(b, "shaders/slug_msdf.frag", "slug_msdf.frag.spv", indirection_size);
         renderer_mod.addAnonymousImport("slug_vert_spv", .{ .root_source_file = vert_spv });
         renderer_mod.addAnonymousImport("slug_frag_spv", .{ .root_source_file = frag_spv });
+        renderer_mod.addAnonymousImport("slug_gradient_frag_spv", .{ .root_source_file = grad_frag_spv });
+        renderer_mod.addAnonymousImport("slug_msdf_frag_spv", .{ .root_source_file = msdf_frag_spv });
 
         const renderer_test_mod = b.createModule(.{
             .root_source_file = b.path("test/renderer.zig"),
