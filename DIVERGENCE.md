@@ -8,7 +8,7 @@ accident; the golden fixtures pin everything else to byte equality.
 
 ### 1. Indirection-table truncation past 256 bands
 
-`slughorn.cpp:1083` (`indirY`) and `slughorn.cpp:1152` (`indirX`) write the band index with
+`slughorn.cpp:1083` (`indirY`) and `slughorn.cpp:1153` (`indirX`) write the band index with
 `static_cast<uint8_t>(band)` and never check it fits. A shape with more than 256 bands on an axis
 therefore wraps -- band 256 becomes band 0 -- and the shader silently reads the wrong band's
 curves. Wrong pixels, no diagnostic.
@@ -32,7 +32,7 @@ silently corrupts band coordinate wrapping in a release build -- exactly where i
 
 ### 3. Band sorts are unstable, with a comparator that is only a partial order
 
-`slughorn.cpp:1055` (horizontal, by max-x) and `slughorn.cpp:1125` (vertical, by max-y) call
+`slughorn.cpp:1056` (horizontal, by max-x) and `slughorn.cpp:1126` (vertical, by max-y) call
 `std::sort` -- unstable -- with a bare `>` comparator. Curves with equal extents may come out in
 any order, so the packed bytes depend on the standard library's pivot choices.
 
@@ -47,7 +47,7 @@ with each other today. Measured against libstdc++ (`n` = count of tied keys):
 **Here:** the comparator breaks ties on curve index, making the order total, so every correct sort
 agrees. This is semantically free -- the descending sort exists only to let the shader stop
 scanning a band early, so any order among equal-extent curves is equally valid. Given upstream
-pushes indices ascending (`slughorn.cpp:1053`/`:1116`), a total order is exactly what
+pushes indices ascending (`slughorn.cpp:1053`/`:1123`), a total order is exactly what
 `std::stable_sort` would produce there.
 
 **Reported upstream:** [AlphaPixel/slughorn#3](https://github.com/AlphaPixel/slughorn/issues/3).
@@ -68,7 +68,7 @@ The bare `>` comparator is not a strict weak ordering when a coordinate is NaN, 
 ### 5. The NanoSVG backend's cubic walk can read past the end of a path
 
 `decomposePath` strides the flat cubic array with `for(int i = 0; i < path->npts - 1; i += 3)`
-(`nanosvg.hpp:363`), then reads six floats at `pts + i*2 + 2`. That bound admits a final iteration
+(`nanosvg.hpp:360`), then reads six floats at `pts + i*2 + 2`. That bound admits a final iteration
 whenever `npts % 3 != 1`, and the read then runs up to four floats past the end of `pts`.
 
 It is latent rather than live: NanoSVG only ever emits `npts = 1 + 3k` ("Expect 1 + N*3 points",
@@ -101,7 +101,7 @@ chaining survives the port -- `d.moveTo(0, 0).lineTo(1, 1).close()`.
 gradient interpolation (M4) becomes `zml.scalar.lerp(c0, c1, t)`, and `zml.color`'s colour-science
 helpers are free functions over vectors that then compose directly.
 
-`Matrix` keeps upstream's six-float layout -- it is the form M4 uploads as a gradient transform, and
+`Matrix` keeps upstream's six-float layout -- it is the form the renderer uploads as a gradient transform, and
 zml has no 2D affine type -- but `apply` now takes and returns a `zml.Vec2f32` instead of loose
 `(x, y)` scalars. `applyDir` is new: the same transform with translation dropped, for tangents and
 deltas.
@@ -150,6 +150,30 @@ This is why golden testing is tiered:
 * **Tier B -- multiple shapes.** Compared semantically (via `decode`), because byte equality with
   the C++ would be asserting a property of libstdc++'s hash table, not of slughorn.
 
+### The Canvas backend: geometry and flat fill, the rest deferred
+
+`slughorn_canvas` ports the core authoring and fill path of `canvas.hpp`: a `Path` records subpaths
+through a `CurveDecomposer`, and a `Canvas` owns a current transform plus a growing `CompositeShape`,
+each `fill`/`defineShape` normalizing the drawn curves to shape-local em-space. Pure Zig -- but a
+backend like the others, importing `slughorn`, never the reverse.
+
+Scope is path geometry (`moveTo`/`lineTo`/`quadTo`/`bezierTo`/`rect`/`roundedRect`/`circle`/`ellipse`/`arc`/`close`),
+the transform stack (`translate`/`scale`/`rotate`/`save`/`restore`), and flat-color `fill`/`defineShape`.
+Deferred -- upstream has them, no consumer here yet: stroking, text, in-canvas gradients, `arcTo`,
+arc-length sampling, masks, and MSDF.
+
+### The FreeType backend: monochrome outlines only
+
+`slughorn_freetype` ports the monochrome path of `freetype.hpp`: a glyph is loaded `FT_LOAD_NO_SCALE`
+(raw font units), its outline walked by `FT_Outline_Decompose` into a `CurveDecomposer`, scaled by
+`1/units_per_EM` into em-space, and keyed by codepoint, with metrics taken straight from FreeType.
+FreeType is C and needs libc, so it stays out of the MIT core behind the same backend seam.
+
+Not ported: COLR/emoji color glyphs -- upstream turns these into a `CompositeShape` of `Layer`s (via
+`emoji.hpp`) -- the uniform two-pass cell layout, and the font-metric tables. Contour orientation is
+inherited verbatim from FreeType: upstream reverses nothing, and the winding-agnostic coverage rule
+handles it downstream.
+
 ### The NanoSVG backend: compositing ported, with three gaps
 
 `slughorn_nanosvg` ports `loadImage` (`nanosvg.hpp:437`): an SVG becomes a `CompositeShape` of
@@ -177,7 +201,7 @@ So an `error.InvalidSvg` would be a lie about what happened, and the signature o
 `image.scale()` instead, which is null precisely when the image is unusable.
 
 Upstream instead warns through a `LogCallback` and returns an empty `CompositeShape`
-(`nanosvg.hpp:462-466`).
+(`nanosvg.hpp:450-454`).
 
 ### The SVG backend is tested against hand-written expectations
 
@@ -240,9 +264,11 @@ unconditionally, yielding `±inf`/NaN where the CPU yields 0. Reachable only whe
 `|by| < EPS`: a near-degenerate, near-horizontal curve. (`EPS = 1/65536` matches on both sides.)
 
 `src/render.zig` mirrors **render.hpp**, guard included, because it exists to be the oracle the
-golden fixtures are compared against. The M3 Slang shader must mirror the **GLSL** instead. Expect
-the two to disagree in that branch, and treat such outliers as expected divergence rather than port
-bugs. The `degenerate_collinear` fixture exists to keep the case measured.
+golden fixtures are compared against. The GPU shader (`shaders/slug.frag`) mirrors the **GLSL**
+instead: `slug.frag:49` computes `0.5 / b.y` unconditionally, where `render.zig` guards it
+(`render.zig:127`/`:150`). Expect the two to disagree in that branch, and treat such outliers as
+expected divergence rather than port bugs. The `degenerate_collinear` fixture exists to keep the
+case measured.
 
 Measured result: the coverage grids agree with the C++ **100% bit-exactly** (not merely within
 tolerance) on every case, including the 512-curve adaptive-subdivision one. The test gates on a
@@ -258,8 +284,8 @@ what `zig build fixtures` does. This is not a formality:
 Building the dumper with `-ffp-contract=fast -march=native` changes `decompose_cubic_fine`'s output.
 `CurveDecomposer::_pointToLineDistSq` (`slughorn.hpp:1606`) computes `dx*dx + dy*dy` and a cross
 product; contracting those into FMAs changes which cubics test as flat, which changes how they
-subdivide. Band boundaries (`minY + snapped * rangeY`, `slughorn.cpp:1029`/`:1036`/`:1080`) are
-likewise contraction-sensitive, and they feed comparisons (`maxY >= lo`, `slughorn.cpp:165`) -- so a
+subdivide. Band boundaries (`minY + snapped * rangeY`, `slughorn.cpp:1031`/`:1041`) are
+likewise contraction-sensitive, and they feed comparisons (`maxY >= lo`, `slughorn.cpp:168`) -- so a
 1-ULP shift can move a curve between bands and change the *integer* output. A random probe puts the
 FMA-vs-mul+add divergence rate for that expression shape at ~24% of inputs.
 

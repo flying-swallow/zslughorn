@@ -69,7 +69,7 @@ pub const Image = struct {
     /// The em-normalization factor, `1 / width`.
     ///
     /// Null when the image has no positive width, which upstream treats as unnormalizable and
-    /// refuses to load (nanosvg.hpp:462-466). A NaN width also lands here, since the comparison is
+    /// refuses to load (nanosvg.hpp:450-454). A NaN width also lands here, since the comparison is
     /// false either way.
     pub fn scale(self: Image) ?Slug {
         if (!(self.handle.width > 0)) return null;
@@ -244,7 +244,7 @@ pub fn decomposePath(
         // `pts` is a flat cubic chain -- x0,y0, [c1x,c1y, c2x,c2y, x1,y1], ... -- so each step
         // consumes 3 points and the window slides by 3 (6 floats).
         //
-        // The bound is `i + 3 < npts`, where upstream writes `i < npts - 1` (nanosvg.hpp:363).
+        // The bound is `i + 3 < npts`, where upstream writes `i < npts - 1` (nanosvg.hpp:360).
         // The two agree exactly for every path nanosvg can actually produce, since it emits
         // npts = 1 + 3k ("Expect 1 + N*3 points", nanosvg.h:1057). They differ only if npts is not
         // 1 mod 3, where upstream's bound admits a final iteration that reads up to 4 floats past
