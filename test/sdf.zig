@@ -132,3 +132,46 @@ test "unknown key renders nothing" {
 
     try testing.expect((try sdf.renderSDF(gpa, &atlas, .{ .name = "missing" }, 48, 0.15)) == null);
 }
+
+test "MsdfAtlas records a per-shape layer and packs an RGB32F array" {
+    const gpa = testing.allocator;
+    var atlas = try squareAtlas(gpa);
+    defer atlas.deinit();
+
+    var ma = sdf.MsdfAtlas.init(32);
+    defer ma.deinit(gpa);
+
+    const layer = (try ma.request(gpa, &atlas, .{ .name = "square" }, 0.15)).?;
+    try testing.expectEqual(@as(i32, 0), layer); // first shape -> layer 0
+    try testing.expectEqual(@as(usize, 1), ma.layerCount());
+
+    // The result is written back onto the core Shape (Phase 2's msdf_layer/msdf_range).
+    const shape = atlas.getShape(.{ .name = "square" }).?;
+    try testing.expectEqual(@as(i32, 0), shape.msdf_layer);
+    try testing.expectApproxEqAbs(@as(Slug, 0.15), shape.msdf_range, 1e-6);
+
+    // Re-request dedups to the same layer without generating a second tile.
+    const again = (try ma.request(gpa, &atlas, .{ .name = "square" }, 0.15)).?;
+    try testing.expectEqual(@as(i32, 0), again);
+    try testing.expectEqual(@as(usize, 1), ma.layerCount());
+
+    // The packed array is RGB32F, tile_size square, one layer.
+    const td = ma.textureData(gpa);
+    defer gpa.free(td.bytes);
+    try testing.expectEqual(@as(u32, 32), td.width);
+    try testing.expectEqual(@as(u32, 32), td.height);
+    try testing.expectEqual(@as(u32, 1), td.depth);
+    try testing.expectEqual(slughorn.TextureData.Format.rgb32f, td.format);
+    try testing.expectEqual(@as(usize, 32 * 32 * 3 * 4), td.bytes.len);
+
+    // The tile's center texel is interior: median(r, g, b) > 0.5. Read alignment-safely.
+    const ti = (16 * 32 + 16) * 3; // first channel of the center texel, in floats
+    const r: f32 = @bitCast(std.mem.readInt(u32, td.bytes[(ti + 0) * 4 ..][0..4], .little));
+    const g: f32 = @bitCast(std.mem.readInt(u32, td.bytes[(ti + 1) * 4 ..][0..4], .little));
+    const b: f32 = @bitCast(std.mem.readInt(u32, td.bytes[(ti + 2) * 4 ..][0..4], .little));
+    try testing.expect(median(r, g, b) > 0.5);
+
+    // Unknown key -> null, nothing generated.
+    try testing.expect((try ma.request(gpa, &atlas, .{ .name = "nope" }, 0.15)) == null);
+    try testing.expectEqual(@as(usize, 1), ma.layerCount());
+}

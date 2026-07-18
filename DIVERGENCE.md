@@ -214,9 +214,17 @@ Consequences of the different generator:
   convention. Here the atlas curves already carry correct nonzero winding (holes reversed at
   decompose time), so the shape is passed through as-is and msdf-zig's `orientation = .guess`
   out-of-bounds probe fixes only the global sign.
-- **Scope.** Only the generation primitives are ported. Upstream's atlas-level MSDF machinery
-  (`rasterizeSDFAtlas`, `requestMSDF`, `Shape.msdfLayer`/`msdfRange`, the `RGB32F` texture format,
-  serialization) is not — it would touch the core `Shape` struct, which stays MSDF-free for now.
+- **Scope.** The generation primitives plus `MsdfAtlas` -- the atlas-level manager that generates
+  one MSDF tile per shape into an `RGB32F` `Texture2DArray` (one shape per layer) and records
+  `(layer, range)` back onto the core `Shape`'s `msdf_layer`/`msdf_range` fields (upstream's
+  `requestMSDF`/`getMSDFTextureData` path). It lives in *this backend*, not the core: the MIT core
+  only carries the result via a metadata setter (`Atlas.setShapeMsdf`) and never links msdf-zig. Not
+  ported: upstream's *separate* shelf-packed `RGBA8` SDF atlas (`rasterizeSDFAtlas`) and MSDF
+  serialization.
+- **MSDF tile convention.** This backend's `renderMSDFTile` letterboxes the shape into the square
+  tile (upstream fills it by non-uniform scaling), so a sampler must derive tile UVs from the
+  centered sub-rect, not upstream's `(emCoord - emOrigin + range) / (emSize + 2*range)`. No oracle
+  pins this either way (msdf-zig ≠ msdfgen), so the letterbox is a deliberate, documented choice.
 
 ### render.zig mirrors render.hpp, not the GLSL
 

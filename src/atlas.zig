@@ -31,6 +31,19 @@ const ShapeBuild = bands_mod.ShapeBuild;
 
 pub const default_texture_width: u32 = 512;
 
+/// Texels per gradient color strip (upstream `GRADIENT_STRIP_WIDTH`, slughorn.hpp:806). 256 gives
+/// 8-bit `t` precision; a sampler's bilinear filtering smooths between texels.
+const gradient_strip_width: u32 = 256;
+
+fn stopLessThan(_: void, a: GradientStop, b: GradientStop) bool {
+    return a.t < b.t;
+}
+
+/// `clamp(v, 0, 1) * 255`, rounded. Matches upstream's `toU8` lambda (no gamma conversion).
+fn toU8(v: Slug) u8 {
+    return @intFromFloat(@max(0.0, @min(1.0, v)) * 255.0 + 0.5);
+}
+
 pub const Atlas = struct {
     gpa: std.mem.Allocator,
 
@@ -53,8 +66,11 @@ pub const Atlas = struct {
     stats: PackingStats = .{},
 
     /// Registered gradient paints, referenced 1-based by `Layer.gradient_id`. Each owns a copy of
-    /// its stops. The GPU-samplable strip upstream rasterizes in `build()` is not generated yet.
+    /// its stops. `build()` rasterizes these into `gradient_data`.
     gradients: std.ArrayList(GradientInfo) = .empty,
+    /// The gradient color strips, produced by `build()`: 256 texels wide (`gradient_strip_width`),
+    /// one RGBA8 row per gradient. Empty when no gradients were registered.
+    gradient_data: TextureData = .{},
 
     /// Creates an atlas whose textures are `tex_width` texels wide.
     ///
@@ -86,6 +102,7 @@ pub const Atlas = struct {
 
         for (self.gradients.items) |g| self.gpa.free(g.stops);
         self.gradients.deinit(self.gpa);
+        if (self.gradient_data.bytes.len != 0) self.gpa.free(self.gradient_data.bytes);
 
         self.* = undefined;
     }
@@ -167,6 +184,8 @@ pub const Atlas = struct {
             .diag = self.diag,
         });
 
+        self.rasterizeGradients();
+
         for (self.build_map.values()) |*b| b.deinit(self.gpa);
         self.build_map.clearAndFree(self.gpa);
         self.built = true;
@@ -215,6 +234,74 @@ pub const Atlas = struct {
 
     pub fn getBandTextureData(self: *const Atlas) *const TextureData {
         return &self.band_data;
+    }
+
+    /// The gradient color strips (256 x gradientCount RGBA8; empty when no gradients). A future
+    /// shader samples it at `V = (gradient_id - 0.5) / gradientCount`, `U = t` (the ramp parameter).
+    pub fn getGradientTextureData(self: *const Atlas) *const TextureData {
+        return &self.gradient_data;
+    }
+
+    /// Rasterizes each registered gradient into one `gradient_strip_width`-wide RGBA8 row of
+    /// `gradient_data`. Ported from `Atlas::rasterizeGradients` (slughorn.cpp:475). Stops are sorted
+    /// ascending by `t` (in place, like upstream); each column samples `t = i/(width-1)`, clamped/
+    /// padded outside the stop range and per-channel linearly interpolated within it. No premultiply
+    /// or gamma conversion -- straight `clamp(v,0,1)*255 + 0.5`.
+    fn rasterizeGradients(self: *Atlas) void {
+        if (self.gradients.items.len == 0) return;
+        const num: u32 = @intCast(self.gradients.items.len);
+
+        const bytes = oom.must(self.gpa.alloc(u8, @as(usize, gradient_strip_width) * num * 4));
+        @memset(bytes, 0);
+        self.gradient_data = .{ .bytes = bytes, .width = gradient_strip_width, .height = num, .format = .rgba8 };
+
+        for (self.gradients.items, 0..) |*grad, g| {
+            const stops = @constCast(grad.stops); // atlas-owned; sort in place, matching upstream
+            std.mem.sort(GradientStop, stops, {}, stopLessThan);
+            if (stops.len == 0) continue;
+
+            for (0..gradient_strip_width) |i| {
+                const t = @as(Slug, @floatFromInt(i)) / @as(Slug, @floatFromInt(gradient_strip_width - 1));
+
+                var col: types.Color = undefined;
+                if (t <= stops[0].t) {
+                    col = stops[0].color;
+                } else if (t >= stops[stops.len - 1].t) {
+                    col = stops[stops.len - 1].color;
+                } else {
+                    col = stops[stops.len - 1].color; // fallback if no bracket matches (shouldn't happen)
+                    var s: usize = 0;
+                    while (s + 1 < stops.len) : (s += 1) {
+                        const t0 = stops[s].t;
+                        const t1 = stops[s + 1].t;
+                        if (t >= t0 and t <= t1) {
+                            const range = t1 - t0;
+                            const frac: Slug = if (range > 1e-9) (t - t0) / range else 0;
+                            const c0 = stops[s].color;
+                            const c1 = stops[s + 1].color;
+                            col = c0 + (c1 - c0) * @as(types.Color, @splat(frac));
+                            break;
+                        }
+                    }
+                }
+
+                const base = (g * gradient_strip_width + i) * 4;
+                bytes[base + 0] = toU8(col[0]);
+                bytes[base + 1] = toU8(col[1]);
+                bytes[base + 2] = toU8(col[2]);
+                bytes[base + 3] = toU8(col[3]);
+            }
+        }
+    }
+
+    /// Sets the MSDF tile result on a built shape. Metadata only -- it does not touch the frozen
+    /// packed textures -- so the SDF/MSDF backend (which owns tile generation) can record which layer
+    /// a shape landed in and the range used, mirroring upstream's post-build `Atlas::requestMSDF`.
+    pub fn setShapeMsdf(self: *Atlas, key: Key, layer: i32, range: Slug) void {
+        if (self.shapes.getPtr(key)) |s| {
+            s.msdf_layer = layer;
+            s.msdf_range = range;
+        }
     }
 
     pub fn getPackingStats(self: *const Atlas) PackingStats {
@@ -313,6 +400,41 @@ test "addGradient registers 1-based, copies stops, and errors after build" {
 
     try a.build();
     try testing.expectError(error.AtlasAlreadyBuilt, a.addGradient(.{ .stops = &stops }));
+}
+
+test "build rasterizes gradients into a 256-wide RGBA8 strip, one row per gradient" {
+    var a = try Atlas.init(testing.allocator, 512);
+    defer a.deinit();
+
+    const stops = [_]GradientStop{
+        .{ .t = 0, .color = types.rgb(1, 0, 0) }, // red at t=0
+        .{ .t = 1, .color = types.rgb(0, 0, 1) }, // blue at t=1
+    };
+    _ = try a.addGradient(.{ .stops = &stops });
+    try a.addShape(.{ .codepoint = 'A' }, .{
+        .curves = &.{.{ .x1 = 0, .y1 = 0, .x2 = 0.5, .y2 = 1, .x3 = 1, .y3 = 0 }},
+    });
+    try a.build();
+
+    const gd = a.getGradientTextureData();
+    try testing.expectEqual(@as(u32, 256), gd.width);
+    try testing.expectEqual(@as(u32, 1), gd.height); // one row per gradient
+    try testing.expectEqual(types.TextureData.Format.rgba8, gd.format);
+    try testing.expectEqual(@as(usize, 256 * 4), gd.bytes.len);
+
+    // Column 0 is the first stop (red), column 255 the last (blue); alpha stays opaque throughout.
+    try testing.expectEqual(@as(u8, 255), gd.bytes[0]); // R
+    try testing.expectEqual(@as(u8, 0), gd.bytes[2]); // B
+    const last = 255 * 4;
+    try testing.expectEqual(@as(u8, 0), gd.bytes[last + 0]); // R
+    try testing.expectEqual(@as(u8, 255), gd.bytes[last + 2]); // B
+    try testing.expectEqual(@as(u8, 255), gd.bytes[last + 3]); // A
+
+    // The midpoint is a ~halfway red/blue blend.
+    const mid = 128 * 4;
+    try testing.expect(gd.bytes[mid + 0] > 100 and gd.bytes[mid + 0] < 160);
+    try testing.expect(gd.bytes[mid + 2] > 100 and gd.bytes[mid + 2] < 160);
+    try testing.expectEqual(@as(u8, 255), gd.bytes[mid + 3]);
 }
 
 test "non-finite coordinates are rejected at ingest" {

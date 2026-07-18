@@ -10,8 +10,10 @@ you feed it curves, it emits packed pixel buffers plus per-shape metadata. Uploa
 and running the Slug shader is the caller's job. (Upstream pairs with `osgSlug`; this one is built
 to pair with [rhi-zig](https://github.com/flying-swallow/rhi-zig).)
 
-> **Status:** Milestone 1. The atlas compiler is complete and validated byte-for-byte against the
-> upstream C++. No backends and no renderer yet — see [Roadmap](#roadmap).
+> **Status:** The atlas compiler is complete and validated byte-for-byte against the upstream C++.
+> The NanoSVG and SDF/MSDF backends, gradients + compositing, atlas-level MSDF, and a headless Vulkan
+> renderer (behind `-Drenderer`, cross-checked bit-exactly against the CPU oracle) are all in. What
+> remains is GPU rendering of gradients/MSDF and the FreeType/Canvas backends — see [Roadmap](#roadmap).
 
 ## Usage
 
@@ -96,9 +98,9 @@ in **[DIVERGENCE.md](DIVERGENCE.md)**.
 | Milestone | Scope | Status |
 |---|---|---|
 | **M1** | Atlas compiler + golden tests | **done** |
-| M2 | Backends: Canvas → FreeType → NanoSVG | NanoSVG paths done; Canvas/FreeType planned |
-| M3 | rhi-zig renderer + Slang shader (Vulkan-only) | planned |
-| M4 | Gradients, MSDF, compositing | MSDF generation done (msdf-zig); gradients/compositing planned |
+| M2 | Backends: Canvas → FreeType → NanoSVG | **NanoSVG done** (geometry + `loadImage` compositing); Canvas/FreeType planned |
+| M3 | rhi-zig renderer + shader (Vulkan-only) | **filled-glyph slice done** (headless, bit-exact vs the CPU oracle); gradient/MSDF rendering planned |
+| M4 | Gradients, MSDF, compositing | **data side done** — gradient strip, `loadImage` compositing, atlas-level MSDF (`Texture2DArray`); GPU rendering of them is M3 |
 
 M3 will live in a separate module: the core has no graphics dependencies and stays MIT, while the
 renderer links rhi-zig (GPL-2.0). See [LICENSE](LICENSE).
@@ -169,9 +171,11 @@ defer grid.deinit(gpa);
 ```
 
 `slughorn_sdf` is a **separate module** that imports `slughorn`, never the reverse — MSDF stays out
-of the MIT core, upstream's default-off side channel. Scope: the generation primitives only.
-Upstream's atlas-level machinery (`rasterizeSDFAtlas`, `requestMSDF`, the `Shape.msdfLayer` field,
-serialization) is not ported.
+of the MIT core, upstream's default-off side channel. Scope: the generation primitives plus
+`MsdfAtlas`, which generates one tile per shape into an RGB32F `Texture2DArray` and records the layer
++ range on the core `Shape` (upstream's `requestMSDF` path). Not ported: upstream's separate
+shelf-packed RGBA8 SDF atlas (`rasterizeSDFAtlas`) and MSDF serialization. See
+[DIVERGENCE.md](DIVERGENCE.md) for the tile-UV convention.
 
 ## Requirements
 
