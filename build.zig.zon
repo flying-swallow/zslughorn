@@ -18,10 +18,15 @@
             .hash = "msdf_zig-1.0.0-5-oN40lgFgDmHjBF-LmdrfyxGw__AzzE6DNY_4XTFX78",
             .lazy = true,
         },
-        // The GPU renderer backend (M3): a separate GPL-2.0 module linking rhi-zig. Sibling path
-        // dep during bring-up; pin by URL+hash once its API settles. Lazy: only fetched under
-        // `-Drenderer=true`, so the default build never pulls in rhi/Vulkan and stays MIT/pure-Zig.
-        .rhi = .{ .path = "../rhi-zig", .lazy = true },
+        // The GPU renderer backend (M3): a separate GPL-2.0 module linking rhi-zig. Pinned by
+        // URL+hash (was a ../rhi-zig sibling path dep, which broke fetching this as a git package).
+        // Lazy: only fetched under `-Drenderer=true`, so the default build never pulls in rhi/Vulkan
+        // and stays MIT/pure-Zig.
+        .rhi = .{
+            .url = "git+https://github.com/flying-swallow/rhi-zig.git#83c54ef1656804aac8ec5f6e45bdcdcc692f1063",
+            .hash = "rhi-0.0.0-o2tdaMyMGABrkIo-yTrkFtPOWW91i9mbYJB4DTg1EpF8",
+            .lazy = true,
+        },
         // The FreeType backend's translate-c wrapper around the *system* libfreetype (nothing
         // fetched). Lazy: only wired under `-Dfreetype=true`, keeping libc/FreeType out of the core.
         .freetype = .{ .path = "deps/freetype", .lazy = true },
