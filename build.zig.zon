@@ -35,6 +35,10 @@
         "build.zig",
         "build.zig.zon",
         "src",
+        // The lazy backend path deps (`nanosvg`, `freetype`): their build.zig is
+        // referenced via lazyImport even when disabled, so they must ship in the
+        // package or consumers fetching slughorn as a git dep fail to resolve them.
+        "deps",
         "LICENSE",
     },
 }
