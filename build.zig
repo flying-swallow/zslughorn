@@ -142,6 +142,66 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&b.addRunArtifact(sdf_tests).step);
     }
 
+    // -- FreeType backend ------------------------------------------------------------------------
+    //
+    // Off by default. Loads real font glyphs into the atlas via the *system* libfreetype (translate-c
+    // wrapper in deps/freetype). A separate module importing `slughorn`, never the reverse -- libc and
+    // FreeType stay out of the MIT core, mirroring the nanosvg seam.
+
+    const enable_freetype = b.option(bool, "freetype", "Build the FreeType backend module (needs system libfreetype)") orelse false;
+
+    if (enable_freetype) {
+        const ft_pkg = b.lazyImport(@This(), "freetype") orelse return;
+        const ft_dep = b.lazyDependency("freetype", .{}) orelse return;
+        const ft_mod = ft_pkg.binding(ft_dep.builder, target, optimize);
+
+        const freetype_mod = b.addModule("slughorn_freetype", .{
+            .root_source_file = b.path("src/backends/freetype.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        freetype_mod.addImport("slughorn", mod);
+        freetype_mod.addImport("freetype", ft_mod);
+
+        const freetype_test_mod = b.createModule(.{
+            .root_source_file = b.path("test/freetype.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        freetype_test_mod.addImport("slughorn", mod);
+        freetype_test_mod.addImport("slughorn_freetype", freetype_mod);
+
+        const freetype_tests = b.addTest(.{ .root_module = freetype_test_mod });
+        test_step.dependOn(&b.addRunArtifact(freetype_tests).step);
+    }
+
+    // -- Canvas backend --------------------------------------------------------------------------
+    //
+    // Off by default. A procedural, Path2D-style drawing API that builds a `CompositeShape`. Pure Zig,
+    // no external deps -- gated for parity with the other backends and to keep the default suite lean.
+
+    const enable_canvas = b.option(bool, "canvas", "Build the Canvas backend module") orelse false;
+
+    if (enable_canvas) {
+        const canvas_mod = b.addModule("slughorn_canvas", .{
+            .root_source_file = b.path("src/backends/canvas.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        canvas_mod.addImport("slughorn", mod);
+
+        const canvas_test_mod = b.createModule(.{
+            .root_source_file = b.path("test/canvas.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        canvas_test_mod.addImport("slughorn", mod);
+        canvas_test_mod.addImport("slughorn_canvas", canvas_mod);
+
+        const canvas_tests = b.addTest(.{ .root_module = canvas_test_mod });
+        test_step.dependOn(&b.addRunArtifact(canvas_tests).step);
+    }
+
     // -- GPU renderer backend (M3) ---------------------------------------------------------------
     //
     // Off by default. The Vulkan renderer + Slug shader that draws the compiled atlas. It links

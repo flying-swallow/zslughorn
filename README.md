@@ -11,9 +11,9 @@ and running the Slug shader is the caller's job. (Upstream pairs with `osgSlug`;
 to pair with [rhi-zig](https://github.com/flying-swallow/rhi-zig).)
 
 > **Status:** The atlas compiler is complete and validated byte-for-byte against the upstream C++.
-> The NanoSVG and SDF/MSDF backends, gradients + compositing, atlas-level MSDF, and a headless Vulkan
-> renderer (behind `-Drenderer`, cross-checked bit-exactly against the CPU oracle) are all in. What
-> remains is GPU rendering of gradients/MSDF and the FreeType/Canvas backends — see [Roadmap](#roadmap).
+> All four backends (NanoSVG, SDF/MSDF, FreeType, Canvas), gradients + compositing, atlas-level MSDF,
+> and a headless Vulkan renderer (behind `-Drenderer`, cross-checked bit-exactly against the CPU
+> oracle) are in. What remains is GPU rendering of gradients/MSDF — see [Roadmap](#roadmap).
 
 ## Usage
 
@@ -98,7 +98,7 @@ in **[DIVERGENCE.md](DIVERGENCE.md)**.
 | Milestone | Scope | Status |
 |---|---|---|
 | **M1** | Atlas compiler + golden tests | **done** |
-| M2 | Backends: Canvas → FreeType → NanoSVG | **NanoSVG done** (geometry + `loadImage` compositing); Canvas/FreeType planned |
+| M2 | Backends: Canvas → FreeType → NanoSVG | **done** — NanoSVG (geometry + `loadImage` compositing), FreeType (monochrome glyphs), Canvas (path + fill) |
 | M3 | rhi-zig renderer + shader (Vulkan-only) | **filled-glyph slice done** (headless, bit-exact vs the CPU oracle); gradient/MSDF rendering planned |
 | M4 | Gradients, MSDF, compositing | **data side done** — gradient strip, `loadImage` compositing, atlas-level MSDF (`Texture2DArray`); GPU rendering of them is M3 |
 

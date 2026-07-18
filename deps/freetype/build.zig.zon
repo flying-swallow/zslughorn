@@ -1,0 +1,12 @@
+.{
+    .name = .slughorn_freetype,
+    .version = "0.0.0",
+    .fingerprint = 0xbfd65608b152be67,
+    .minimum_zig_version = "0.17.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "ft.h",
+        "main.zig",
+    },
+}
