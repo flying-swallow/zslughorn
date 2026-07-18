@@ -279,3 +279,99 @@ test "shapes are reported visible and filled" {
     try testing.expect(svg.isFilled(shape));
     try testing.expect(it.next() == null);
 }
+
+// -- loadImage: SVG -> CompositeShape --------------------------------------------------------------
+//
+// No oracle (same reason as above), so these pin behaviour: layer count/order, parsed colors, and
+// gradient registration -- not exact geometry.
+
+fn colorNear(col: slughorn.Color, r: Slug, g: Slug, b: Slug, a: Slug) bool {
+    return @abs(col[0] - r) < 0.01 and @abs(col[1] - g) < 0.01 and
+        @abs(col[2] - b) < 0.01 and @abs(col[3] - a) < 0.01;
+}
+
+test "loadImage builds one layer per filled shape, in document order" {
+    const gpa = testing.allocator;
+    const source =
+        \\<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+        \\  <rect id="a" x="10" y="10" width="30" height="30" fill="#ff0000"/>
+        \\  <rect id="b" x="60" y="60" width="30" height="30" fill="#0000ff"/>
+        \\</svg>
+    ;
+    const image = svg.parseFromMemory(gpa, source, dpi);
+    defer image.deinit();
+
+    var atlas = try slughorn.Atlas.init(gpa, slughorn.default_texture_width);
+    defer atlas.deinit();
+
+    var composite = (try svg.loadImage(gpa, &atlas, image, .default, true)).?;
+    defer composite.deinit(gpa);
+
+    try testing.expectEqual(@as(usize, 2), composite.layers.items.len);
+    try testing.expectEqual(@as(Slug, 1), composite.advance); // normalized width
+
+    const l0 = composite.layers.items[0];
+    const l1 = composite.layers.items[1];
+    try testing.expectEqualStrings("a", l0.key.name); // layers keep the SVG ids, in order
+    try testing.expectEqualStrings("b", l1.key.name);
+    try testing.expect(colorNear(l0.color, 1, 0, 0, 1));
+    try testing.expect(colorNear(l1.color, 0, 0, 1, 1));
+    try testing.expectEqual(@as(u32, 0), l0.gradient_id); // flat color -> no gradient
+}
+
+test "loadImage registers a linear gradient and links it to the layer" {
+    const gpa = testing.allocator;
+    const source =
+        \\<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+        \\  <defs>
+        \\    <linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
+        \\      <stop offset="0" stop-color="#ff0000"/>
+        \\      <stop offset="1" stop-color="#0000ff"/>
+        \\    </linearGradient>
+        \\  </defs>
+        \\  <rect id="r" x="10" y="10" width="80" height="80" fill="url(#g)"/>
+        \\</svg>
+    ;
+    const image = svg.parseFromMemory(gpa, source, dpi);
+    defer image.deinit();
+
+    var atlas = try slughorn.Atlas.init(gpa, slughorn.default_texture_width);
+    defer atlas.deinit();
+
+    var composite = (try svg.loadImage(gpa, &atlas, image, .default, true)).?;
+    defer composite.deinit(gpa);
+
+    try testing.expectEqual(@as(usize, 1), composite.layers.items.len);
+    const layer = composite.layers.items[0];
+    try testing.expect(layer.gradient_id != 0); // 1-based id links the layer to the gradient
+    try testing.expectEqual(@as(usize, 1), atlas.gradientCount());
+
+    const grad = atlas.getGradient(layer.gradient_id).?;
+    try testing.expectEqual(slughorn.GradientType.linear, grad.type);
+    try testing.expectEqual(@as(usize, 2), grad.stops.len);
+    try testing.expect(colorNear(grad.stops[0].color, 1, 0, 0, 1));
+    try testing.expect(colorNear(grad.stops[1].color, 0, 0, 1, 1));
+    try testing.expectApproxEqAbs(@as(Slug, 0), grad.stops[0].t, 0.001);
+    try testing.expectApproxEqAbs(@as(Slug, 1), grad.stops[1].t, 0.001);
+}
+
+test "loadImage skips shapes with no fill" {
+    const gpa = testing.allocator;
+    const source =
+        \\<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+        \\  <rect x="10" y="10" width="30" height="30" fill="none"/>
+        \\  <rect id="v" x="50" y="50" width="30" height="30" fill="#00ff00"/>
+        \\</svg>
+    ;
+    const image = svg.parseFromMemory(gpa, source, dpi);
+    defer image.deinit();
+
+    var atlas = try slughorn.Atlas.init(gpa, slughorn.default_texture_width);
+    defer atlas.deinit();
+
+    var composite = (try svg.loadImage(gpa, &atlas, image, .default, true)).?;
+    defer composite.deinit(gpa);
+
+    try testing.expectEqual(@as(usize, 1), composite.layers.items.len); // the unfilled rect is dropped
+    try testing.expect(colorNear(composite.layers.items[0].color, 0, 1, 0, 1));
+}

@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const zml = @import("zml");
+const Key = @import("key.zig").Key;
 
 /// The scalar type for all geometry. `slug_t` upstream (slughorn.hpp:57).
 ///
@@ -177,6 +178,66 @@ pub const GradientInfo = struct {
     /// Sweep only: arc range in turns, [0, 1].
     start_angle: Slug = 0,
     end_angle: Slug = 1,
+};
+
+/// How a layer participates in rendering. Ported from `DrawMode`, slughorn.hpp:328. Numeric values
+/// are wire-stable (`visible` must stay 0). `mask` is reserved for the masking feature and is unused
+/// by the current compositing frontend.
+pub const DrawMode = enum(u8) {
+    visible = 0, // normal render
+    hidden = 1, // in atlas, no draw call; temporary toggle
+    geometry = 2, // curves in atlas, no quad ever; path source for sampling/animation
+    mask = 3, // stencil source for subsequent layers (reserved)
+};
+
+/// How a layer composites over what is below it. Ported from `BlendMode`, slughorn.hpp:335
+/// (`src_over` must stay 0). Only the Porter-Duff group is ported; the advanced Photoshop-style
+/// modes (>= 20 upstream) are omitted until a consumer needs them.
+pub const BlendMode = enum(u8) {
+    src_over = 0, // default; normal alpha composite
+    src = 1,
+    dst = 2,
+    src_in = 3,
+    dst_in = 4,
+    src_out = 5,
+    dst_out = 6,
+    src_atop = 7,
+    dst_atop = 8,
+    xor = 9,
+    clear = 10,
+    dst_over = 11,
+};
+
+/// One layer of a `CompositeShape`: a reference to atlas geometry (`key`) plus how to paint and
+/// place it. Ported from `Layer`, slughorn.hpp:477. Geometry is not stored here -- it lives in the
+/// `Atlas` under `key`. When `gradient_id` is non-zero it is a 1-based index into the atlas's
+/// gradients and `color`'s rgb is ignored (the alpha channel stays a global opacity multiplier).
+pub const Layer = struct {
+    key: Key,
+    color: Color = .{ 1, 1, 1, 1 },
+    transform: Transform = .{},
+    scale: Slug = 1,
+    effect_id: u32 = 0,
+    effect_param: Slug = 0,
+    gradient_id: u32 = 0,
+    expand: Slug = 0.01,
+    draw_mode: DrawMode = .visible,
+    blend_mode: BlendMode = .src_over,
+};
+
+/// A back-to-front ordered stack of `Layer`s treated as one logical shape -- the NanoSVG
+/// `loadImage` frontend's output. Ported from `CompositeShape`, slughorn.hpp:520. Owns its `layers`
+/// list (each `Layer` is a value; name keys borrow, like everywhere else). Upstream also carries an
+/// optional `mask`; that and the `Mask` type are unported -- `loadImage` never sets one.
+pub const CompositeShape = struct {
+    layers: std.ArrayList(Layer) = .empty,
+    /// Horizontal advance / arrangement hint; `loadImage` sets it to the em-normalized width (1.0).
+    advance: Slug = 0,
+
+    pub fn deinit(self: *CompositeShape, gpa: std.mem.Allocator) void {
+        self.layers.deinit(gpa);
+        self.* = .{};
+    }
 };
 
 /// Pixel data ready to hand to a graphics API, exactly as `Atlas::TextureData`

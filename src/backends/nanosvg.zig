@@ -12,10 +12,11 @@
 //! nanosvg.hpp:17), unconditionally. To recover authoring-space positions, multiply a `Transform`
 //! by the image's width/height.
 //!
-//! Scope: filled shapes' path geometry, including the evenodd -> nonzero winding conversion.
-//! Gradients, strokes, and the `CompositeShape`/`Layer` compositing API (`loadImage` upstream) are
-//! not ported yet. The shared core types they build on -- `Transform`, `GradientInfo` -- now live in
-//! `types.zig`; `CompositeShape`/`Layer` themselves arrive with the compositing frontend.
+//! Scope: filled shapes' path geometry (including the evenodd -> nonzero winding conversion) and the
+//! `loadImage` compositing frontend -- an SVG becomes a `CompositeShape` of `Layer`s with flat-color
+//! and linear/radial gradient paints. Not ported: strokes (upstream skips them too), the per-shape
+//! `ShapeRule` policy config, and `Mask` (upstream's `loadImage` never sets one). See DIVERGENCE.md
+//! for the radial-gradient `units` divergence.
 
 const std = @import("std");
 const slughorn = @import("slughorn");
@@ -27,11 +28,17 @@ pub const c = nanosvg.c;
 const oom = slughorn.oom;
 const Slug = slughorn.Slug;
 const Curve = slughorn.Curve;
+const Color = slughorn.Color;
+const Matrix = slughorn.Matrix;
 const Origin = slughorn.Origin;
 const ShapeInfo = slughorn.ShapeInfo;
 const Atlas = slughorn.Atlas;
 const Key = slughorn.Key;
 const CurveDecomposer = slughorn.CurveDecomposer;
+const GradientInfo = slughorn.GradientInfo;
+const GradientStop = slughorn.GradientStop;
+const Layer = slughorn.Layer;
+const CompositeShape = slughorn.CompositeShape;
 
 /// Upstream hardcodes "px" at both call sites (nanosvg.hpp:677, :704).
 const units = "px";
@@ -333,4 +340,195 @@ pub fn loadShape(
 
     try atlas.addShape(key, info);
     return decomposed.transform;
+}
+
+/// nanosvg packs colors as 0xAABBGGRR (byte order R, G, B, A). Ported from `colorFromNSVG`,
+/// nanosvg.hpp:156.
+fn colorFromNSVG(abgr: u32) Color {
+    return .{
+        @as(Slug, @floatFromInt(abgr & 0xFF)) / 255.0,
+        @as(Slug, @floatFromInt((abgr >> 8) & 0xFF)) / 255.0,
+        @as(Slug, @floatFromInt((abgr >> 16) & 0xFF)) / 255.0,
+        @as(Slug, @floatFromInt((abgr >> 24) & 0xFF)) / 255.0,
+    };
+}
+
+/// 2x3 affine inverse, matching nanosvg's internal `nsvg__xformInverse` (which is behind
+/// `NANOSVG_IMPLEMENTATION` and so invisible to translate-c). f64 intermediates, as upstream.
+fn xformInverse(inv: *[6]f32, t: [6]f32) void {
+    const det = @as(f64, t[0]) * t[3] - @as(f64, t[2]) * t[1];
+    if (det > -1e-6 and det < 1e-6) {
+        inv.* = .{ 1, 0, 0, 1, 0, 0 };
+        return;
+    }
+    const invdet = 1.0 / det;
+    inv[0] = @floatCast(@as(f64, t[3]) * invdet);
+    inv[1] = @floatCast(-@as(f64, t[1]) * invdet);
+    inv[2] = @floatCast(-@as(f64, t[2]) * invdet);
+    inv[3] = @floatCast(@as(f64, t[0]) * invdet);
+    inv[4] = @floatCast((@as(f64, t[2]) * t[5] - @as(f64, t[3]) * t[4]) * invdet);
+    inv[5] = @floatCast((@as(f64, t[1]) * t[4] - @as(f64, t[0]) * t[5]) * invdet);
+}
+
+/// Applies a 2x3 affine to a point. Matches nanosvg's internal `nsvg__xformPoint`.
+fn xformPoint(t: [6]f32, x: f32, y: f32) [2]f32 {
+    return .{ x * t[0] + y * t[2] + t[4], x * t[1] + y * t[3] + t[5] };
+}
+
+/// `t = xx*emX + xy*emY + dx` projects an em point onto the gradient axis. Ported from
+/// `buildLinearGradientMatrix`, slughorn.hpp:1393.
+fn buildLinearGradientMatrix(x0: Slug, y0: Slug, x1: Slug, y1: Slug) Matrix {
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const len_sq = dx * dx + dy * dy;
+    if (len_sq < 1e-12) return Matrix.identity;
+    const inv = 1.0 / len_sq;
+    return .{ .xx = dx * inv, .xy = dy * inv, .dx = -(x0 * dx + y0 * dy) * inv };
+}
+
+/// Packs the gradient center into dx/dy and the 2x2 B matrix (em-delta -> normalized gradient space)
+/// into the linear part. Ported from `buildAffineRadialGradientMatrix`, slughorn.hpp:1443.
+fn buildAffineRadialGradientMatrix(cx: Slug, cy: Slug, b00: Slug, b01: Slug, b10: Slug, b11: Slug) Matrix {
+    return .{ .xx = b00, .yx = b10, .xy = b01, .yy = b11, .dx = cx, .dy = cy };
+}
+
+/// Parses `shape`'s linear/radial fill gradient into a `GradientInfo`, registers it with `atlas`,
+/// and returns the 1-based gradient id (null if the gradient is empty or degenerate).
+///
+/// Ported from the gradient arm of `loadImage`, nanosvg.hpp:498-618. **Divergence:** upstream applies
+/// an object-bounding-box isotropic-radius correction gated on `NSVGgradient::units`, but the pinned
+/// nanosvg's *public* gradient struct has no `units` field (it lives on the implementation-internal
+/// `NSVGgradientData`), so that correction is dropped -- radials on non-square bounding boxes are
+/// slightly off. See DIVERGENCE.md.
+fn parseGradient(
+    gpa: std.mem.Allocator,
+    atlas: *Atlas,
+    shape: *const c.NSVGshape,
+    scale: Slug,
+    shape_opacity: Slug,
+    is_radial: bool,
+) !?u32 {
+    const g = shape.fill.unnamed_0.gradient; // translate-c names the anonymous paint union
+    if (g == null or g.*.nstops == 0) return null;
+
+    const nstops: usize = @intCast(g.*.nstops);
+    const stops_c = @as([*]const c.NSVGgradientStop, @ptrCast(&g.*.stops))[0..nstops];
+
+    var stops = try gpa.alloc(GradientStop, nstops);
+    defer gpa.free(stops); // addGradient copies; this temporary is freed either way
+    for (stops_c, 0..) |sc, i| {
+        var col = colorFromNSVG(sc.color);
+        col[3] = col[3] * shape_opacity;
+        stops[i] = .{ .t = sc.offset, .color = col };
+    }
+
+    const min_x_em = shape.bounds[0] * scale;
+    const min_y_em = shape.bounds[1] * scale;
+
+    // nanosvg stores xform as the inverse of gradient->pixel; invert to get the forward transform.
+    var fwd: [6]f32 = undefined;
+    xformInverse(&fwd, g.*.xform);
+
+    var info: GradientInfo = .{ .stops = stops };
+    if (!is_radial) {
+        const p0 = xformPoint(fwd, 0, 0);
+        const p1 = xformPoint(fwd, 0, 1);
+        info.type = .linear;
+        info.transform = buildLinearGradientMatrix(
+            p0[0] * scale - min_x_em,
+            p0[1] * scale - min_y_em,
+            p1[0] * scale - min_x_em,
+            p1[1] * scale - min_y_em,
+        );
+    } else {
+        const center = xformPoint(fwd, 0, 0);
+        const det = fwd[0] * fwd[3] - fwd[2] * fwd[1];
+        if (@abs(det) < 1e-10) return null; // degenerate radial
+        const inv_s_det = 1.0 / (scale * det);
+        var b00 = fwd[3] * inv_s_det;
+        var b01 = -fwd[2] * inv_s_det;
+        var b10 = -fwd[1] * inv_s_det;
+        var b11 = fwd[0] * inv_s_det;
+        if (b11 < 0) { // the shader convention needs b11 > 0
+            b00 = -b00;
+            b01 = -b01;
+            b10 = -b10;
+            b11 = -b11;
+        }
+        info.type = .affine_radial;
+        info.transform = buildAffineRadialGradientMatrix(
+            center[0] * scale - min_x_em,
+            center[1] * scale - min_y_em,
+            b00,
+            b01,
+            b10,
+            b11,
+        );
+        info.inner_radius = 0;
+    }
+    return try atlas.addGradient(info);
+}
+
+/// Loads a whole SVG into a `CompositeShape` -- one `Layer` per visible, filled shape, in document
+/// order, with its color/gradient paint and placement. Ported from `loadImage`, nanosvg.hpp:437.
+///
+/// Returns null when the image is unnormalizable (zero width -- see `Image.scale`). The caller owns
+/// the returned `CompositeShape` and must keep `image` alive while using it: name-keyed layers
+/// borrow the source shapes' id strings.
+///
+/// Scope vs upstream: strokes are skipped (upstream skips them too -- stroke-to-fill is unwired), and
+/// the per-shape `ShapeRule`/policy config is not ported (every visible filled shape is included).
+pub fn loadImage(
+    gpa: std.mem.Allocator,
+    atlas: *Atlas,
+    image: Image,
+    origin: Origin,
+    auto_metrics: bool,
+) !?CompositeShape {
+    const scale = image.scale() orelse return null;
+    const height_em = image.heightEm() orelse 1;
+
+    var composite: CompositeShape = .{ .advance = 1 }; // normalized image width is always 1.0
+    errdefer composite.deinit(gpa);
+
+    var auto_key: u21 = 0;
+    var it = image.shapes();
+    while (it.next()) |shape| {
+        if (!isVisible(shape)) continue;
+
+        const ft = shape.fill.type;
+        var color: Color = .{ 1, 1, 1, 1 };
+        var gradient_id: u32 = 0;
+
+        if (ft == enumAs(@TypeOf(ft), c.NSVG_PAINT_COLOR)) {
+            color = colorFromNSVG(shape.fill.unnamed_0.color);
+            color[3] = color[3] * shape.opacity;
+            if (color[3] < 1e-4) continue; // fully transparent -> drop
+        } else if (ft == enumAs(@TypeOf(ft), c.NSVG_PAINT_LINEAR_GRADIENT) or
+            ft == enumAs(@TypeOf(ft), c.NSVG_PAINT_RADIAL_GRADIENT))
+        {
+            const is_radial = ft == enumAs(@TypeOf(ft), c.NSVG_PAINT_RADIAL_GRADIENT);
+            gradient_id = (try parseGradient(gpa, atlas, shape, scale, shape.opacity, is_radial)) orelse continue;
+        } else {
+            continue; // NSVG_PAINT_NONE / unsupported: skip (no ForceInclude/policy support)
+        }
+
+        // Name-keyed by SVG id when present (borrows the id string), else an auto codepoint.
+        const id = std.mem.sliceTo(&shape.id, 0);
+        const key: Key = if (id.len > 0) .{ .name = id } else blk: {
+            defer auto_key += 1;
+            break :blk .{ .codepoint = auto_key };
+        };
+
+        const transform = (try loadShape(gpa, atlas, shape, key, scale, origin, auto_metrics, height_em)) orelse continue;
+
+        oom.must(composite.layers.append(gpa, .{
+            .key = key,
+            .color = color,
+            .transform = transform,
+            .gradient_id = gradient_id,
+        }));
+    }
+
+    return composite;
 }

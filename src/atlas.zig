@@ -24,6 +24,8 @@ const Shape = types.Shape;
 const ShapeInfo = types.ShapeInfo;
 const TextureData = types.TextureData;
 const PackingStats = types.PackingStats;
+const GradientInfo = types.GradientInfo;
+const GradientStop = types.GradientStop;
 const Key = key_mod.Key;
 const ShapeBuild = bands_mod.ShapeBuild;
 
@@ -49,6 +51,10 @@ pub const Atlas = struct {
     curve_data: TextureData = .{},
     band_data: TextureData = .{},
     stats: PackingStats = .{},
+
+    /// Registered gradient paints, referenced 1-based by `Layer.gradient_id`. Each owns a copy of
+    /// its stops. The GPU-samplable strip upstream rasterizes in `build()` is not generated yet.
+    gradients: std.ArrayList(GradientInfo) = .empty,
 
     /// Creates an atlas whose textures are `tex_width` texels wide.
     ///
@@ -77,6 +83,9 @@ pub const Atlas = struct {
 
         if (self.curve_data.bytes.len != 0) self.gpa.free(self.curve_data.bytes);
         if (self.band_data.bytes.len != 0) self.gpa.free(self.band_data.bytes);
+
+        for (self.gradients.items) |g| self.gpa.free(g.stops);
+        self.gradients.deinit(self.gpa);
 
         self.* = undefined;
     }
@@ -176,6 +185,30 @@ pub const Atlas = struct {
         return self.shapes.getPtr(key);
     }
 
+    /// Registers a gradient paint, returning its 1-based id for `Layer.gradient_id` (0 = flat
+    /// color). The stops are copied. Must be called before `build()`.
+    ///
+    /// Ported from `Atlas::addGradient` (slughorn.cpp:305). Upstream silently returns 0 when the
+    /// atlas is already built; here that is `error.AtlasAlreadyBuilt`, matching `addShape`. Only the
+    /// registration is ported -- the GPU gradient strip upstream rasterizes during `build()` is not.
+    pub fn addGradient(self: *Atlas, info: GradientInfo) error{AtlasAlreadyBuilt}!u32 {
+        if (self.built) return error.AtlasAlreadyBuilt;
+        var owned = info;
+        owned.stops = oom.must(self.gpa.dupe(GradientStop, info.stops));
+        oom.must(self.gradients.append(self.gpa, owned));
+        return @intCast(self.gradients.items.len);
+    }
+
+    /// The gradient registered under `id` (1-based), or null for 0 / out of range. Borrows.
+    pub fn getGradient(self: *const Atlas, id: u32) ?*const GradientInfo {
+        if (id == 0 or id > self.gradients.items.len) return null;
+        return &self.gradients.items[id - 1];
+    }
+
+    pub fn gradientCount(self: *const Atlas) usize {
+        return self.gradients.items.len;
+    }
+
     pub fn getCurveTextureData(self: *const Atlas) *const TextureData {
         return &self.curve_data;
     }
@@ -252,6 +285,34 @@ test "mutating a built atlas is an error, not a silent no-op" {
     try testing.expectError(error.AtlasAlreadyBuilt, a.addShape(.{ .codepoint = 'B' }, .{
         .curves = &.{.{ .x1 = 0, .y1 = 0, .x2 = 0.5, .y2 = 1, .x3 = 1, .y3 = 0 }},
     }));
+}
+
+test "addGradient registers 1-based, copies stops, and errors after build" {
+    var a = try Atlas.init(testing.allocator, 512);
+    defer a.deinit();
+
+    // Stops in caller-owned (stack) memory: the atlas must copy, not borrow, them.
+    const stops = [_]GradientStop{
+        .{ .t = 0, .color = types.rgb(1, 0, 0) },
+        .{ .t = 1, .color = types.rgb(0, 0, 1) },
+    };
+    const id1 = try a.addGradient(.{ .type = .linear, .stops = &stops });
+    const id2 = try a.addGradient(.{ .type = .affine_radial, .stops = &stops });
+    try testing.expectEqual(@as(u32, 1), id1); // 1-based; 0 means "none"
+    try testing.expectEqual(@as(u32, 2), id2);
+    try testing.expectEqual(@as(usize, 2), a.gradientCount());
+
+    const g = a.getGradient(id1).?;
+    try testing.expectEqual(types.GradientType.linear, g.type);
+    try testing.expectEqual(@as(usize, 2), g.stops.len);
+    try testing.expect(@intFromPtr(g.stops.ptr) != @intFromPtr(&stops)); // copied
+    try testing.expectEqual(@as(Slug, 1), g.stops[1].t);
+
+    try testing.expect(a.getGradient(0) == null);
+    try testing.expect(a.getGradient(3) == null);
+
+    try a.build();
+    try testing.expectError(error.AtlasAlreadyBuilt, a.addGradient(.{ .stops = &stops }));
 }
 
 test "non-finite coordinates are rejected at ingest" {

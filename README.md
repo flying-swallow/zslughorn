@@ -137,9 +137,11 @@ while (it.next()) |shape| {
 }
 ```
 
-Scope: path geometry, including the `fill-rule="evenodd"` → nonzero winding conversion. Gradients,
-strokes, and the `CompositeShape`/`Layer` compositing API are not ported — they need core types that
-do not exist yet (M4).
+Scope: path geometry (including the `fill-rule="evenodd"` → nonzero winding conversion) plus the
+`loadImage` compositing frontend — an SVG becomes a `CompositeShape` of `Layer`s with flat-color and
+linear/radial gradient paints. Strokes, the per-shape rule/policy config, and masks are not ported;
+radial gradients drop the object-bounding-box radius correction (the pinned nanosvg doesn't expose
+the `units` field it needs). See [DIVERGENCE.md](DIVERGENCE.md).
 
 ## SDF / MSDF backend
 

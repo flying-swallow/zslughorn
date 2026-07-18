@@ -150,13 +150,23 @@ This is why golden testing is tiered:
 * **Tier B -- multiple shapes.** Compared semantically (via `decode`), because byte equality with
   the C++ would be asserting a property of libstdc++'s hash table, not of slughorn.
 
-### The NanoSVG backend covers paths only
+### The NanoSVG backend: compositing ported, with three gaps
 
-Upstream's `nanosvg.hpp` builds a `CompositeShape` of `Layer`s (`loadImage`, `nanosvg.hpp:435`).
-Neither type is ported yet, so `slughorn_nanosvg` stops at the level below: `decomposePath` and
-`loadShape`, which need only `ShapeInfo` and `CurveDecomposer`. Gradients and strokes are out for
-the same reason. `Transform` (`slughorn.hpp:165`) lives in the backend rather than `types.zig`
-until `CompositeShape`/`Layer` arrive and give it a reason to be core.
+`slughorn_nanosvg` ports `loadImage` (`nanosvg.hpp:437`): an SVG becomes a `CompositeShape` of
+`Layer`s -- one per visible filled shape, in document order, with flat-color and linear/radial
+gradient paints registered via `Atlas.addGradient`. `Transform`, `GradientInfo`, `Layer`, and
+`CompositeShape` moved into `types.zig` as part of this. Three deliberate gaps remain:
+
+* **Radial gradients drop the object-bounding-box radius correction.** Upstream corrects a
+  non-square-bbox radial's isotropic radius using `NSVGgradient::units` (`nanosvg.hpp:594`). That
+  field exists only on nanosvg's *internal* `NSVGgradientData`, behind `NANOSVG_IMPLEMENTATION`, so
+  translate-c never sees it -- the same missing field that stops the C++ SVG backend compiling at
+  all. The public `xform` still carries the base geometry, so radials render, just slightly off on
+  non-square bounding boxes.
+* **Strokes are skipped** -- upstream's `loadImage` skips them too (stroke-to-fill is unwired there).
+* **The per-shape `ShapeRule`/policy config and `Mask` are not ported.** Every visible filled shape
+  is included; there is no `ForceInclude`/`ForceExclude`/`GeometryOnly` override, and
+  `CompositeShape.mask` is always empty (`loadImage` never sets one). The core `Mask` type is unported.
 
 ### parseFromMemory has no parse error
 
