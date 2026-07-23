@@ -13,7 +13,6 @@
 const std = @import("std");
 const build_options = @import("build_options");
 
-const oom = @import("oom.zig");
 const types = @import("types.zig");
 const errors = @import("errors.zig");
 
@@ -221,12 +220,12 @@ pub fn buildShapeBands(
 
     // -- horizontal bands (sliced along Y) -------------------------------------------------------
     {
-        const hboundaries = oom.must(gpa.alloc(Slug, num_bands_y + 1));
+        const hboundaries = gpa.alloc(Slug, num_bands_y + 1) catch @panic("slughorn: oom");
         defer gpa.free(hboundaries);
 
         computeBoundaries(hboundaries, build.splits_y.items, num_bands_y, min_y, max_y, range_y);
 
-        oom.must(build.hbands.resize(gpa, num_bands_y));
+        build.hbands.resize(gpa, num_bands_y) catch @panic("slughorn: oom");
         for (build.hbands.items) |*b| b.* = .{};
 
         for (build.hbands.items, 0..) |*band, b| {
@@ -235,7 +234,7 @@ pub fn buildShapeBands(
 
             for (build.curves.items, 0..) |c, ci| {
                 if (curveIntersectsBandY(c, lo, hi)) {
-                    oom.must(band.curve_indices.append(gpa, @intCast(ci)));
+                    band.curve_indices.append(gpa, @intCast(ci)) catch @panic("slughorn: oom");
                 }
             }
 
@@ -252,12 +251,12 @@ pub fn buildShapeBands(
 
     // -- vertical bands (sliced along X) ---------------------------------------------------------
     {
-        const vboundaries = oom.must(gpa.alloc(Slug, num_bands_x + 1));
+        const vboundaries = gpa.alloc(Slug, num_bands_x + 1) catch @panic("slughorn: oom");
         defer gpa.free(vboundaries);
 
         computeBoundaries(vboundaries, build.splits_x.items, num_bands_x, min_x, max_x, range_x);
 
-        oom.must(build.vbands.resize(gpa, num_bands_x));
+        build.vbands.resize(gpa, num_bands_x) catch @panic("slughorn: oom");
         for (build.vbands.items) |*b| b.* = .{};
 
         for (build.vbands.items, 0..) |*band, b| {
@@ -266,7 +265,7 @@ pub fn buildShapeBands(
 
             for (build.curves.items, 0..) |c, ci| {
                 if (curveIntersectsBandX(c, lo, hi)) {
-                    oom.must(band.curve_indices.append(gpa, @intCast(ci)));
+                    band.curve_indices.append(gpa, @intCast(ci)) catch @panic("slughorn: oom");
                 }
             }
 
@@ -330,7 +329,7 @@ fn buildIndirection(
 ) void {
     const isize_f: Slug = @floatFromInt(indirection_size);
 
-    oom.must(out.resize(gpa, indirection_size));
+    out.resize(gpa, indirection_size) catch @panic("slughorn: oom");
 
     for (out.items, 0..) |*slot, q| {
         const fq: Slug = @floatFromInt(q);
@@ -420,9 +419,9 @@ test "band sort is descending by extent, with ties broken by index" {
     defer b.deinit(gpa);
 
     // Curves 0 and 2 tie on max-x (1.0); curve 1 is larger (2.0).
-    oom.must(b.curves.append(gpa, .{ .x1 = 0, .y1 = 0, .x2 = 0.5, .y2 = 0.1, .x3 = 1, .y3 = 0 }));
-    oom.must(b.curves.append(gpa, .{ .x1 = 0, .y1 = 0, .x2 = 1.0, .y2 = 0.1, .x3 = 2, .y3 = 0 }));
-    oom.must(b.curves.append(gpa, .{ .x1 = 0, .y1 = 0, .x2 = 0.5, .y2 = 0.1, .x3 = 1, .y3 = 0 }));
+    b.curves.append(gpa, .{ .x1 = 0, .y1 = 0, .x2 = 0.5, .y2 = 0.1, .x3 = 1, .y3 = 0 }) catch @panic("slughorn: oom");
+    b.curves.append(gpa, .{ .x1 = 0, .y1 = 0, .x2 = 1.0, .y2 = 0.1, .x3 = 2, .y3 = 0 }) catch @panic("slughorn: oom");
+    b.curves.append(gpa, .{ .x1 = 0, .y1 = 0, .x2 = 0.5, .y2 = 0.1, .x3 = 1, .y3 = 0 }) catch @panic("slughorn: oom");
 
     try buildShapeBands(gpa, &b, 1, 1, false, .default);
 
@@ -438,7 +437,7 @@ test "auto band count is curves/2, clamped to [1, 16]" {
     {
         var b: ShapeBuild = .{};
         defer b.deinit(gpa);
-        oom.must(b.curves.append(gpa, .{ .x1 = 0, .y1 = 0, .x2 = 0.5, .y2 = 1, .x3 = 1, .y3 = 0 }));
+        b.curves.append(gpa, .{ .x1 = 0, .y1 = 0, .x2 = 0.5, .y2 = 1, .x3 = 1, .y3 = 0 }) catch @panic("slughorn: oom");
         try buildShapeBands(gpa, &b, 0, 0, false, .default);
         try testing.expectEqual(@as(usize, 1), b.hbands.items.len);
         try testing.expectEqual(@as(u32, 0), b.metrics.band_max_y);
@@ -450,7 +449,7 @@ test "auto band count is curves/2, clamped to [1, 16]" {
         defer b.deinit(gpa);
         for (0..100) |i| {
             const t: Slug = @as(Slug, @floatFromInt(i)) / 100.0;
-            oom.must(b.curves.append(gpa, .{ .x1 = 0, .y1 = t, .x2 = 0.5, .y2 = t, .x3 = 1, .y3 = t }));
+            b.curves.append(gpa, .{ .x1 = 0, .y1 = t, .x2 = 0.5, .y2 = t, .x3 = 1, .y3 = t }) catch @panic("slughorn: oom");
         }
         try buildShapeBands(gpa, &b, 0, 0, false, .default);
         try testing.expectEqual(@as(usize, 16), b.hbands.items.len);
@@ -463,7 +462,7 @@ test "auto metrics come from the curve bounding box" {
 
     var b: ShapeBuild = .{};
     defer b.deinit(gpa);
-    oom.must(b.curves.append(gpa, .{ .x1 = 0.25, .y1 = 0.5, .x2 = 0.5, .y2 = 0.75, .x3 = 0.75, .y3 = 0.5 }));
+    b.curves.append(gpa, .{ .x1 = 0.25, .y1 = 0.5, .x2 = 0.5, .y2 = 0.75, .x3 = 0.75, .y3 = 0.5 }) catch @panic("slughorn: oom");
 
     try buildShapeBands(gpa, &b, 1, 1, false, .default);
 
@@ -479,7 +478,7 @@ test "more than 256 bands is rejected instead of silently truncating" {
 
     var b: ShapeBuild = .{};
     defer b.deinit(gpa);
-    oom.must(b.curves.append(gpa, .{ .x1 = 0, .y1 = 0, .x2 = 0.5, .y2 = 1, .x3 = 1, .y3 = 0 }));
+    b.curves.append(gpa, .{ .x1 = 0, .y1 = 0, .x2 = 0.5, .y2 = 1, .x3 = 1, .y3 = 0 }) catch @panic("slughorn: oom");
 
     // 256 bands is the most a u8 index can address, so it must be accepted ...
     try buildShapeBands(gpa, &b, 256, 1, false, .default);
@@ -488,7 +487,7 @@ test "more than 256 bands is rejected instead of silently truncating" {
     // ... and 257 rejected. Upstream truncates here and reads the wrong band at runtime.
     var b2: ShapeBuild = .{};
     defer b2.deinit(gpa);
-    oom.must(b2.curves.append(gpa, .{ .x1 = 0, .y1 = 0, .x2 = 0.5, .y2 = 1, .x3 = 1, .y3 = 0 }));
+    b2.curves.append(gpa, .{ .x1 = 0, .y1 = 0, .x2 = 0.5, .y2 = 1, .x3 = 1, .y3 = 0 }) catch @panic("slughorn: oom");
     try testing.expectError(error.TooManyBands, buildShapeBands(gpa, &b2, 257, 1, false, .default));
 }
 
@@ -509,7 +508,7 @@ test "degenerate (zero-extent) range is clamped, not divided by zero" {
     var b: ShapeBuild = .{};
     defer b.deinit(gpa);
     // A horizontal line: zero y-range.
-    oom.must(b.curves.append(gpa, .{ .x1 = 0, .y1 = 0.5, .x2 = 0.5, .y2 = 0.5, .x3 = 1, .y3 = 0.5 }));
+    b.curves.append(gpa, .{ .x1 = 0, .y1 = 0.5, .x2 = 0.5, .y2 = 0.5, .x3 = 1, .y3 = 0.5 }) catch @panic("slughorn: oom");
 
     try buildShapeBands(gpa, &b, 1, 1, false, .default);
 

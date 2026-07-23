@@ -21,7 +21,6 @@ const std = @import("std");
 const slughorn = @import("slughorn");
 const msdf = @import("msdf");
 
-const oom = slughorn.oom;
 const Slug = slughorn.Slug;
 const Curve = slughorn.Curve;
 const Atlas = slughorn.Atlas;
@@ -74,18 +73,18 @@ fn toShape(gpa: std.mem.Allocator, curves: []const Curve) msdf.Shape {
 
     var contour: msdf.Contour = .{};
     for (curves, 0..) |c, i| {
-        oom.must(contour.edges.append(gpa, msdf.EdgeSegment.create(
+        contour.edges.append(gpa, msdf.EdgeSegment.create(
             v2(c.x1, c.y1),
             v2(c.x2, c.y2),
             v2(c.x3, c.y3),
             null,
             .white,
-        )));
+        )) catch @panic("slughorn: oom");
 
         const last = i + 1 == curves.len;
         const brk = !last and (c.x3 != curves[i + 1].x1 or c.y3 != curves[i + 1].y1);
         if (last or brk) {
-            oom.must(shape.contours.append(gpa, contour));
+            shape.contours.append(gpa, contour) catch @panic("slughorn: oom");
             contour = .{};
         }
     }
@@ -261,9 +260,9 @@ pub const MsdfAtlas = struct {
         var grid = (try renderMSDFTile(gpa, atlas, key, self.tile_size, range)) orelse return null;
         defer grid.deinit(gpa);
 
-        const tile = oom.must(gpa.dupe(f32, grid.data));
+        const tile = gpa.dupe(f32, grid.data) catch @panic("slughorn: oom");
         const layer: i32 = @intCast(self.layers.items.len);
-        oom.must(self.layers.append(gpa, tile));
+        self.layers.append(gpa, tile) catch @panic("slughorn: oom");
         atlas.setShapeMsdf(key, layer, range);
         return layer;
     }
@@ -281,7 +280,7 @@ pub const MsdfAtlas = struct {
     pub fn textureData(self: *const MsdfAtlas, gpa: std.mem.Allocator) TextureData {
         const num: u32 = @intCast(self.layers.items.len);
         const floats_per_tile: usize = @as(usize, self.tile_size) * self.tile_size * 3;
-        const bytes = oom.must(gpa.alloc(u8, floats_per_tile * num * 4));
+        const bytes = gpa.alloc(u8, floats_per_tile * num * 4) catch @panic("slughorn: oom");
         var off: usize = 0;
         for (self.layers.items) |tile| {
             const src = std.mem.sliceAsBytes(tile);

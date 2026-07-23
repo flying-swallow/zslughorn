@@ -19,7 +19,6 @@
 const std = @import("std");
 const slughorn = @import("slughorn");
 
-const oom = slughorn.oom;
 const Slug = slughorn.Slug;
 const Curve = slughorn.Curve;
 const Color = slughorn.Color;
@@ -72,7 +71,7 @@ pub const Path = struct {
     // -- transform stack -------------------------------------------------------------------------
 
     pub fn save(self: *Path, gpa: std.mem.Allocator) void {
-        oom.must(self.ctm_stack.append(gpa, self.ctm));
+        self.ctm_stack.append(gpa, self.ctm) catch @panic("slughorn: oom");
     }
 
     pub fn restore(self: *Path) void {
@@ -139,7 +138,7 @@ pub const Path = struct {
     pub fn closePath(self: *Path, gpa: std.mem.Allocator) void {
         self.ensureBound(gpa);
         _ = self.decomposer.close();
-        oom.must(self.pending.appendSlice(gpa, self.active.items));
+        self.pending.appendSlice(gpa, self.active.items) catch @panic("slughorn: oom");
         self.active.clearRetainingCapacity();
     }
 
@@ -328,8 +327,8 @@ pub const Canvas = struct {
         // Gather every subpath's curves (closed ones in `pending`, plus any still-open `active`).
         var all: std.ArrayList(Curve) = .empty;
         defer all.deinit(self.gpa);
-        oom.must(all.appendSlice(self.gpa, self.path.pending.items));
-        oom.must(all.appendSlice(self.gpa, self.path.active.items));
+        all.appendSlice(self.gpa, self.path.pending.items) catch @panic("slughorn: oom");
+        all.appendSlice(self.gpa, self.path.active.items) catch @panic("slughorn: oom");
         if (all.items.len == 0) return;
 
         // Scale authoring units to em-space, then find the bbox.
@@ -364,11 +363,11 @@ pub const Canvas = struct {
         try self.atlas.addShape(key, .{ .curves = all.items, .auto_metrics = true });
 
         if (push_layer) {
-            oom.must(self.composite.layers.append(self.gpa, .{
+            self.composite.layers.append(self.gpa, .{
                 .key = key,
                 .color = color,
                 .transform = .{ .x = min_x, .y = min_y },
-            }));
+            }) catch @panic("slughorn: oom");
         }
 
         self.path.clear(self.gpa);

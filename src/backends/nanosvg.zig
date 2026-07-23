@@ -25,7 +25,6 @@ const nanosvg = @import("nanosvg");
 /// Raw translate-c'd nanosvg. Exposed so callers can reach fields this wrapper does not surface.
 pub const c = nanosvg.c;
 
-const oom = slughorn.oom;
 const Slug = slughorn.Slug;
 const Curve = slughorn.Curve;
 const Color = slughorn.Color;
@@ -122,18 +121,18 @@ pub fn isFilled(shape: *const c.NSVGshape) bool {
 /// There is no parse error, because NanoSVG has no notion of invalid input: anything unparseable
 /// yields an *empty* image with zero width rather than a failure. `nsvgParse` returns null in
 /// exactly one case -- its own parser allocation failing (nanosvg.h:3033-3035) -- which is OOM, and
-/// this project panics on OOM rather than reporting it (see `oom.zig`). So callers asking "was that
+/// this project panics on OOM rather than reporting it (see the note in `slughorn.zig`). So callers asking "was that
 /// really an SVG?" should test `scale()`, which is null precisely when the image is unusable.
 ///
 /// The text is duplicated rather than borrowed: `nsvgParse` needs a NUL terminator and *mutates*
 /// the buffer it is handed. The caller's slice is left untouched.
 pub fn parseFromMemory(gpa: std.mem.Allocator, svg_text: []const u8, dpi: Slug) Image {
-    const buf = oom.must(gpa.dupeSentinel(u8, svg_text, 0));
+    const buf = gpa.dupeSentinel(u8, svg_text, 0) catch @panic("slughorn: oom");
     defer gpa.free(buf);
 
     const parsed: ?*c.NSVGimage = c.nsvgParse(buf.ptr, units, dpi);
     const handle: std.mem.Allocator.Error!*c.NSVGimage = parsed orelse error.OutOfMemory;
-    return .{ .handle = oom.must(handle) };
+    return .{ .handle = handle catch @panic("slughorn: oom") };
 }
 
 /// Parses an SVG file.
@@ -225,7 +224,7 @@ pub fn decomposePath(
 
     var cursor: ?*const c.NSVGpath = shape.paths;
     while (cursor) |path| : (cursor = path.next) {
-        oom.must(paths.append(gpa, path));
+        paths.append(gpa, path) catch @panic("slughorn: oom");
     }
     std.mem.reverse(*const c.NSVGpath, paths.items);
 
@@ -522,12 +521,12 @@ pub fn loadImage(
 
         const transform = (try loadShape(gpa, atlas, shape, key, scale, origin, auto_metrics, height_em)) orelse continue;
 
-        oom.must(composite.layers.append(gpa, .{
+        composite.layers.append(gpa, .{
             .key = key,
             .color = color,
             .transform = transform,
             .gradient_id = gradient_id,
-        }));
+        }) catch @panic("slughorn: oom");
     }
 
     return composite;

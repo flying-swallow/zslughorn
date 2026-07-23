@@ -3,7 +3,7 @@
 
 //! Domain errors, and the diagnostic channel that carries the detail Zig error values cannot.
 //!
-//! Note what is absent: `error.OutOfMemory`. See `oom.zig`.
+//! Note what is absent: `error.OutOfMemory` -- allocation failure panics (see the note in `slughorn.zig`).
 
 const std = @import("std");
 const Key = @import("key.zig").Key;

@@ -26,7 +26,6 @@
 const std = @import("std");
 const build_options = @import("build_options");
 
-const oom = @import("oom.zig");
 const types = @import("types.zig");
 
 const Slug = types.Slug;
@@ -325,7 +324,7 @@ pub const Sampler = struct {
         var grid: Grid = .{
             .width = size.w,
             .height = size.h,
-            .data = oom.must(gpa.alloc(Slug, size.w * size.h)),
+            .data = gpa.alloc(Slug, size.w * size.h) catch @panic("slughorn: oom"),
         };
         @memset(grid.data, 0);
 

@@ -11,7 +11,6 @@
 
 const std = @import("std");
 
-const oom = @import("oom.zig");
 const types = @import("types.zig");
 const errors = @import("errors.zig");
 const bands_mod = @import("bands.zig");
@@ -115,8 +114,8 @@ pub const Atlas = struct {
                 // Reuse an existing interned copy when we already have this shape.
                 if (self.build_map.getKey(key)) |k| break :blk k;
                 if (self.shapes.getKey(key)) |k| break :blk k;
-                const copy = oom.must(self.gpa.dupe(u8, n));
-                oom.must(self.names.append(self.gpa, copy));
+                const copy = self.gpa.dupe(u8, n) catch @panic("slughorn: oom");
+                self.names.append(self.gpa, copy) catch @panic("slughorn: oom");
                 break :blk .{ .name = copy };
             },
         };
@@ -141,9 +140,9 @@ pub const Atlas = struct {
         var b: ShapeBuild = .{};
         errdefer b.deinit(self.gpa);
 
-        oom.must(b.curves.appendSlice(self.gpa, desc.curves));
-        oom.must(b.splits_x.appendSlice(self.gpa, desc.splits_x));
-        oom.must(b.splits_y.appendSlice(self.gpa, desc.splits_y));
+        b.curves.appendSlice(self.gpa, desc.curves) catch @panic("slughorn: oom");
+        b.splits_x.appendSlice(self.gpa, desc.splits_x) catch @panic("slughorn: oom");
+        b.splits_y.appendSlice(self.gpa, desc.splits_y) catch @panic("slughorn: oom");
 
         if (!desc.auto_metrics) {
             b.metrics.bearing_x = desc.bearing_x;
@@ -166,7 +165,7 @@ pub const Atlas = struct {
 
         // Replacing an existing shape must not leak the old build.
         if (self.build_map.getPtr(owned)) |existing| existing.deinit(self.gpa);
-        oom.must(self.build_map.put(self.gpa, owned, b));
+        self.build_map.put(self.gpa, owned, b) catch @panic("slughorn: oom");
     }
 
     /// Compiles every registered shape into the textures.
@@ -213,8 +212,8 @@ pub const Atlas = struct {
     pub fn addGradient(self: *Atlas, info: GradientInfo) error{AtlasAlreadyBuilt}!u32 {
         if (self.built) return error.AtlasAlreadyBuilt;
         var owned = info;
-        owned.stops = oom.must(self.gpa.dupe(GradientStop, info.stops));
-        oom.must(self.gradients.append(self.gpa, owned));
+        owned.stops = self.gpa.dupe(GradientStop, info.stops) catch @panic("slughorn: oom");
+        self.gradients.append(self.gpa, owned) catch @panic("slughorn: oom");
         return @intCast(self.gradients.items.len);
     }
 
@@ -251,7 +250,7 @@ pub const Atlas = struct {
         if (self.gradients.items.len == 0) return;
         const num: u32 = @intCast(self.gradients.items.len);
 
-        const bytes = oom.must(self.gpa.alloc(u8, @as(usize, gradient_strip_width) * num * 4));
+        const bytes = self.gpa.alloc(u8, @as(usize, gradient_strip_width) * num * 4) catch @panic("slughorn: oom");
         @memset(bytes, 0);
         self.gradient_data = .{ .bytes = bytes, .width = gradient_strip_width, .height = num, .format = .rgba8 };
 

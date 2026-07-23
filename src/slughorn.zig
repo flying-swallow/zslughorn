@@ -18,7 +18,11 @@
 //!     const curve_tex = atlas.getCurveTextureData();
 //!     const band_tex = atlas.getBandTextureData();
 //!
-//! Note on errors: allocation failure **panics** rather than being returned. See `oom.zig`.
+//! Note on errors: allocation failure **panics** (`@panic("slughorn: oom")` at the call site)
+//! rather than being returned. OOM is unrecoverable here; threading `error.OutOfMemory` through
+//! every signature would bury the errors a caller can actually act on (a band that does not fit a
+//! texture row, a uint16 overflow) under one they cannot. This also matches the upstream C++,
+//! which throws `std::bad_alloc` and never catches it.
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -27,8 +31,6 @@ const build_options = @import("build_options");
 /// without declaring a second dependency -- and, more importantly, so they get *this* copy of it.
 /// Two `zml` instances would mean two structurally identical but incompatible vector types.
 pub const zml = @import("zml");
-
-pub const oom = @import("oom.zig");
 
 const errors = @import("errors.zig");
 pub const Error = errors.Error;

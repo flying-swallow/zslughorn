@@ -12,7 +12,6 @@
 const std = @import("std");
 const build_options = @import("build_options");
 
-const oom = @import("oom.zig");
 const types = @import("types.zig");
 const errors = @import("errors.zig");
 const bands_mod = @import("bands.zig");
@@ -174,7 +173,7 @@ pub fn packTextures(
         .width = tex_width,
         .height = curve_tex_height,
         .format = .rgba32f,
-        .bytes = oom.must(gpa.alloc(u8, @as(usize, tex_width) * curve_tex_height * 4 * @sizeOf(f32))),
+        .bytes = gpa.alloc(u8, @as(usize, tex_width) * curve_tex_height * 4 * @sizeOf(f32)) catch @panic("slughorn: oom"),
     };
     @memset(out.curve_data.bytes, 0);
 
@@ -202,7 +201,7 @@ pub fn packTextures(
         .width = tex_width,
         .height = band_tex_height,
         .format = .rgba16ui,
-        .bytes = oom.must(gpa.alloc(u8, @as(usize, tex_width) * band_tex_height * 4 * @sizeOf(u16))),
+        .bytes = gpa.alloc(u8, @as(usize, tex_width) * band_tex_height * 4 * @sizeOf(u16)) catch @panic("slughorn: oom"),
     };
     @memset(out.band_data.bytes, 0);
 
@@ -221,7 +220,7 @@ pub fn packTextures(
         const g = entry.value_ptr;
 
         // -- curves: two texels each, (x1,y1,x2,y2) then (x3,y3,0,0) ----------------------------
-        const curve_locs = oom.must(gpa.alloc(u32, g.curves.items.len));
+        const curve_locs = gpa.alloc(u32, g.curves.items.len) catch @panic("slughorn: oom");
         defer gpa.free(curve_locs);
 
         for (g.curves.items, 0..) |c, ci| {
@@ -278,7 +277,7 @@ pub fn packTextures(
             out.stats.band_texels_used += 2 * indirection_size;
         }
 
-        const headers = oom.must(gpa.alloc(BandPacker.Header, num_headers));
+        const headers = gpa.alloc(BandPacker.Header, num_headers) catch @panic("slughorn: oom");
         defer gpa.free(headers);
         @memset(headers, .{});
 
@@ -320,9 +319,9 @@ pub fn packTextures(
         out.stats.band_texels_used += num_headers;
 
         // The shape takes ownership of its curves; the ShapeBuild is discarded after this.
-        sd.curves = oom.must(g.curves.toOwnedSlice(gpa));
+        sd.curves = g.curves.toOwnedSlice(gpa) catch @panic("slughorn: oom");
 
-        oom.must(out.shapes.put(gpa, key, sd));
+        out.shapes.put(gpa, key, sd) catch @panic("slughorn: oom");
     }
 }
 

@@ -9,7 +9,6 @@
 //! Ported from `CurveDecomposer`, slughorn.hpp:1511.
 
 const std = @import("std");
-const oom = @import("oom.zig");
 const types = @import("types.zig");
 
 const Slug = types.Slug;
@@ -37,7 +36,7 @@ const max_depth: u32 = 8;
 
 /// Accumulates quadratic Beziers from path commands.
 ///
-/// Allocation failure panics (see `oom.zig`), so none of these methods return errors -- which is
+/// Allocation failure panics (see the note in `slughorn.zig`), so none of these methods return errors -- which is
 /// what lets them chain the way the C++ does:
 ///
 ///     _ = d.moveTo(0, 0).lineTo(1, 0).cubicTo(1, 0.5, 0.5, 1, 0, 1).close();
@@ -127,7 +126,7 @@ pub const CurveDecomposer = struct {
     }
 
     fn push(self: *CurveDecomposer, c: Curve) void {
-        oom.must(self.curves.append(self.gpa, c));
+        self.curves.append(self.gpa, c) catch @panic("slughorn: oom");
     }
 
     /// Squared distance from (px, py) to the infinite line through (ax, ay) -> (bx, by).
