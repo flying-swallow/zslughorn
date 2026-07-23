@@ -38,37 +38,6 @@ pub fn alignCursorForSpan(cursor: u32, width: u32, span: u32) u32 {
     return cursor;
 }
 
-/// Writes texels into a `TextureData`'s byte buffer.
-///
-/// Replaces upstream's three near-identical `write*Texel` lambdas (slughorn.cpp:1268-1305) and
-/// their `reinterpret_cast`s. Out-of-range writes are silently dropped, matching upstream's
-/// `if (y >= height) return;` guard.
-pub const TexWriter = struct {
-    tex: *TextureData,
-
-    pub fn writeRGBA32F(self: TexWriter, idx: u32, r: Slug, g: Slug, b: Slug, a: Slug) void {
-        const x = idx % self.tex.width;
-        const y = idx / self.tex.width;
-        if (y >= self.tex.height) return;
-
-        const off = (@as(usize, y) * self.tex.width + x) * 4 * @sizeOf(f32);
-        for ([_]Slug{ r, g, b, a }, 0..) |v, i| {
-            std.mem.writeInt(u32, self.tex.bytes[off + i * 4 ..][0..4], @bitCast(v), .little);
-        }
-    }
-
-    pub fn writeRGBA16UI(self: TexWriter, idx: u32, r: u16, g: u16, b: u16, a: u16) void {
-        const x = idx % self.tex.width;
-        const y = idx / self.tex.width;
-        if (y >= self.tex.height) return;
-
-        const off = (@as(usize, y) * self.tex.width + x) * 4 * @sizeOf(u16);
-        for ([_]u16{ r, g, b, a }, 0..) |v, i| {
-            std.mem.writeInt(u16, self.tex.bytes[off + i * 2 ..][0..2], v, .little);
-        }
-    }
-};
-
 /// What `packTextures` produces.
 pub const Output = struct {
     curve_data: *TextureData,
@@ -96,7 +65,7 @@ const Cursor = struct {
 /// This is upstream's `packBandList` lambda (slughorn.cpp:1411), which captured six things and
 /// needed to raise -- a real struct rather than a closure.
 const BandPacker = struct {
-    w: TexWriter,
+    w: *TextureData,
     tex_width: u32,
     shape_start: u32,
     curve_locs: []const u32,
@@ -165,7 +134,8 @@ const BandPacker = struct {
                 // Absolute curve-texture coordinates. This is what makes a shape's packed block
                 // non-relocatable, and therefore what makes iteration order part of the output --
                 // see DIVERGENCE.md.
-                self.w.writeRGBA16UI(
+                self.w.writeRGBA(
+                    u16,
                     self.cursor.pos,
                     @intCast(loc % self.tex_width),
                     @intCast(loc / self.tex_width),
@@ -242,9 +212,6 @@ pub fn packTextures(
         .band_texels_total = tex_width * band_tex_height,
     };
 
-    const cw: TexWriter = .{ .tex = out.curve_data };
-    const bw: TexWriter = .{ .tex = out.band_data };
-
     var curve_cursor: Cursor = .{ .width = tex_width, .padding = &out.stats.curve_texels_padding };
     var band_cursor: Cursor = .{ .width = tex_width, .padding = &out.stats.band_texels_padding };
 
@@ -261,8 +228,8 @@ pub fn packTextures(
             curve_cursor.alignFor(2);
             curve_locs[ci] = curve_cursor.pos;
 
-            cw.writeRGBA32F(curve_cursor.pos, c.x1, c.y1, c.x2, c.y2);
-            cw.writeRGBA32F(curve_cursor.pos + 1, c.x3, c.y3, 0, 0);
+            out.curve_data.writeRGBA(Slug, curve_cursor.pos, c.x1, c.y1, c.x2, c.y2);
+            out.curve_data.writeRGBA(Slug, curve_cursor.pos + 1, c.x3, c.y3, 0, 0);
 
             curve_cursor.pos += 2;
             out.stats.curve_texels_used += 2;
@@ -305,8 +272,8 @@ pub fn packTextures(
         {
             for (0..indirection_size) |q| {
                 const qi: u32 = @intCast(q);
-                bw.writeRGBA16UI(shape_start + qi, g.indir_y.items[q], 0, 0, 0);
-                bw.writeRGBA16UI(shape_start + indirection_size + qi, g.indir_x.items[q], 0, 0, 0);
+                out.band_data.writeRGBA(u16, shape_start + qi, g.indir_y.items[q], 0, 0, 0);
+                out.band_data.writeRGBA(u16, shape_start + indirection_size + qi, g.indir_x.items[q], 0, 0, 0);
             }
             out.stats.band_texels_used += 2 * indirection_size;
         }
@@ -318,7 +285,7 @@ pub fn packTextures(
         band_cursor.pos = shape_start + block_size;
 
         var packer: BandPacker = .{
-            .w = bw,
+            .w = out.band_data,
             .tex_width = tex_width,
             .shape_start = shape_start,
             .curve_locs = curve_locs,
@@ -336,11 +303,12 @@ pub fn packTextures(
         // because their offsets are not known until the lists above have been placed.
         for (0..num_h) |i| {
             const ii: u32 = @intCast(i);
-            bw.writeRGBA16UI(shape_start + indir_size + ii, headers[i].count, headers[i].offset, 0, 0);
+            out.band_data.writeRGBA(u16, shape_start + indir_size + ii, headers[i].count, headers[i].offset, 0, 0);
         }
         for (0..num_v) |i| {
             const ii: u32 = @intCast(i);
-            bw.writeRGBA16UI(
+            out.band_data.writeRGBA(
+                u16,
                 shape_start + indir_size + num_h + ii,
                 headers[num_h + i].count,
                 headers[num_h + i].offset,
@@ -398,7 +366,7 @@ test "alignCursorForSpan cannot rescue an over-wide span" {
     }
 }
 
-test "TexWriter round-trips both formats and drops out-of-range writes" {
+test "TextureData.writeRGBA round-trips both formats and drops out-of-range writes" {
     const gpa = testing.allocator;
 
     var tex: TextureData = .{
@@ -410,18 +378,17 @@ test "TexWriter round-trips both formats and drops out-of-range writes" {
     defer gpa.free(tex.bytes);
     @memset(tex.bytes, 0);
 
-    const w: TexWriter = .{ .tex = &tex };
-    w.writeRGBA32F(5, 1.5, -2.5, 3.5, 4.5); // x=1, y=1
+    tex.writeRGBA(Slug, 5, 1.5, -2.5, 3.5, 4.5); // x=1, y=1
 
     const off = (1 * 4 + 1) * 4 * @sizeOf(f32);
     try testing.expectEqual(@as(f32, 1.5), @as(f32, @bitCast(std.mem.readInt(u32, tex.bytes[off..][0..4], .little))));
     try testing.expectEqual(@as(f32, 4.5), @as(f32, @bitCast(std.mem.readInt(u32, tex.bytes[off + 12 ..][0..4], .little))));
 
     // Past the last row: dropped, not a buffer overrun.
-    w.writeRGBA32F(100, 9, 9, 9, 9);
+    tex.writeRGBA(Slug, 100, 9, 9, 9, 9);
 }
 
-test "TexWriter writes RGBA16UI little-endian" {
+test "TextureData.writeRGBA writes RGBA16UI little-endian" {
     const gpa = testing.allocator;
 
     var tex: TextureData = .{
@@ -433,8 +400,7 @@ test "TexWriter writes RGBA16UI little-endian" {
     defer gpa.free(tex.bytes);
     @memset(tex.bytes, 0);
 
-    const w: TexWriter = .{ .tex = &tex };
-    w.writeRGBA16UI(1, 0x1234, 0x5678, 0, 0);
+    tex.writeRGBA(u16, 1, 0x1234, 0x5678, 0, 0);
 
     try testing.expectEqualSlices(u8, &.{ 0x34, 0x12, 0x78, 0x56, 0, 0, 0, 0 }, tex.bytes[8..16]);
 }

@@ -272,6 +272,25 @@ pub const TextureData = struct {
     depth: u32 = 0,
     format: Format = .rgba32f,
 
+    /// Writes one texel's four channels at flat texel index `idx`. `T` is the channel type:
+    /// `Slug` for `.rgba32f`, `u16` for `.rgba16ui`.
+    ///
+    /// Replaces upstream's three near-identical `write*Texel` lambdas (slughorn.cpp:1268-1305)
+    /// and their `reinterpret_cast`s. Out-of-range writes are silently dropped, matching
+    /// upstream's `if (y >= height) return;` guard.
+    pub fn writeRGBA(self: *TextureData, comptime T: type, idx: u32, r: T, g: T, b: T, a: T) void {
+        const x = idx % self.width;
+        const y = idx / self.width;
+        if (y >= self.height) return;
+
+        const IntType = @Int(.unsigned, @bitSizeOf(T));
+        const size = @sizeOf(T);
+        const off = (@as(usize, y) * self.width + x) * 4 * size;
+        for ([_]T{ r, g, b, a }, 0..) |v, i| {
+            std.mem.writeInt(IntType, self.bytes[off + i * size ..][0..size], @bitCast(v), .little);
+        }
+    }
+
     pub fn isEmpty(self: TextureData) bool {
         return self.bytes.len == 0;
     }
